@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 
 /// A small drawing with one of every kind of element.
 func sampleScene() -> Scene {
-  var scene = Scene(paper: Paper(width: 400, height: 300))
+  var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 400, height: 300)))
   var box = Element(id: "box", kind: .rectangle)
   box.frame = CGRect(x: 20, y: 30, width: 120, height: 80)
   box.fill = Color(hex: "#FF3B30")
@@ -41,7 +41,7 @@ func sampleScene() -> Scene {
 
 /// A PNG of a solid colour.
 func solidPNG(width: Int, height: Int, color: Color) -> Data {
-  var scene = Scene(paper: Paper(width: CGFloat(width), height: CGFloat(height), background: color))
+  var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: width, height: height), background: color))
   scene.elements = []
   return Renderer.png(Renderer.image(scene)!)!
 }
@@ -187,7 +187,7 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
         { $0.elements.append(Element(kind: .rectangle)) },
         { $0.elements.remove(at: 2) },
         { $0.reorder(["box"], .front) },
-        { $0.paper.width = 999 },
+        { $0.frame = CGRect(x: 0, y: 0, width: 999, height: 300) },
         { $0.delete(["ring", "label"]); $0.elements.insert(Element(kind: .ellipse), at: 1); $0.elements[0].fill = nil },
         { $0.duplicate(["box", "shape"], offset: CGPoint(x: 10, y: 10)) },
         { $0.group(["box", "ring"]) },
@@ -291,9 +291,13 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
       let xs = scene.elements.map(\.x).sorted()
       let gaps = zip(xs, xs.dropFirst()).map { $1 - $0 }
       #expect(gaps.allSatisfy { abs($0 - gaps[0]) < 0.001 })
+      // One object lines up with the frame, and stays put without one.
       var one = row(1)
       one.align(["e0"], .center)
-      #expect(one.elements[0].center.x == one.paper.width / 2)
+      #expect(one == row(1))
+      one.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+      one.align(["e0"], .center)
+      #expect(one.elements[0].center.x == 200)
     }
 
     @Test func groupsStayTogetherAndActAsOne() {
@@ -347,28 +351,52 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
     }
   }
 
-  @Suite struct Paper_ {
+  @Suite struct Frame {
     @Test func rotatingFourTimesRestores() {
       let original = sampleScene()
       var scene = original
-      scene.rotatePaper(clockwise: true)
-      #expect(scene.paper.width == 300 && scene.paper.height == 400)
-      #expect(scene.contentBounds.minX >= -5 && scene.contentBounds.maxX <= 305)
-      for _ in 0..<3 { scene.rotatePaper(clockwise: true) }
+      scene.rotateDrawing(clockwise: true)
+      let frame = scene.frame!
+      #expect(frame.width == 300 && frame.height == 400)
+      #expect(scene.contentBounds.minX >= frame.minX - 5 && scene.contentBounds.maxX <= frame.maxX + 5)
+      for _ in 0..<3 { scene.rotateDrawing(clockwise: true) }
+      #expect(scene.frame == original.frame)
       for (a, b) in zip(scene.elements, original.elements) {
         #expect(a.center.distance(to: b.center) < 0.01)
         #expect(abs(sin(a.rotation - b.rotation)) < 0.0001)
       }
     }
 
-    @Test func resizingKeepsTheAnchor() {
+    @Test func resizingKeepsTheAnchorAndTheDrawing() {
       var scene = sampleScene()
       let box = scene["box"]!.frame
-      scene.resizePaper(to: CGSize(width: 600, height: 500), anchor: .center)
-      #expect(scene.paper.width == 600 && scene.paper.height == 500)
-      #expect(scene["box"]!.frame == box.offsetBy(dx: 100, dy: 100))
-      scene.crop(to: CGRect(x: 100, y: 100, width: 50, height: 50))
+      scene.resizeFrame(to: CGSize(width: 600, height: 500), anchor: .center)
+      #expect(scene.frame == CGRect(x: -100, y: -100, width: 600, height: 500))
       #expect(scene["box"]!.frame == box)
+      scene.crop(to: CGRect(x: 100.4, y: 100, width: 50, height: 50))
+      #expect(scene.frame == CGRect(x: 100, y: 100, width: 51, height: 50))
+      #expect(scene["box"]!.frame == box)
+    }
+
+    @Test func withoutAFrameExportsCoverTheDrawing() {
+      var scene = sampleScene()
+      scene.frame = nil
+      let content = scene.contentBounds
+      let area = try! #require(scene.exportArea)
+      #expect(area.contains(content) && area.width <= content.width + Paper.margin * 2 + 2)
+      #expect(Scene().exportArea == nil)
+      scene.fitFrameToDrawing()
+      #expect(scene.frame == area)
+      let image = Renderer.image(Scene(elements: scene.elements, files: scene.files))!
+      #expect(image.width == Int(area.width) && image.height == Int(area.height))
+    }
+
+    @Test func oldFilesWithPaperOpenFramed() throws {
+      let json = ##"{"type":"bristle","version":1,"paper":{"width":320,"height":200,"background":"#FFFFFF"},"elements":[]}"##
+      let scene = try SceneFile.scene(from: Data(json.utf8))
+      #expect(scene.frame == CGRect(x: 0, y: 0, width: 320, height: 200) && scene.paper.background == .white)
+      let saved = try SceneFile.scene(from: SceneFile.data(scene))
+      #expect(saved == scene)
     }
   }
 

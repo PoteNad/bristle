@@ -2,7 +2,7 @@ import CoreGraphics
 import CryptoKit
 import Foundation
 
-/// A drawing: the paper, the elements from back to front, and the images they show.
+/// A drawing: the canvas settings, the elements from back to front, and the images they show.
 public struct Scene: Equatable, Sendable {
   public var paper: Paper
   /// Back to front: later elements draw over earlier ones.
@@ -40,22 +40,36 @@ public struct Scene: Equatable, Sendable {
     files = files.filter { used.contains($0.key) }
   }
 
-  public var paperRect: CGRect { CGRect(x: 0, y: 0, width: paper.width, height: paper.height) }
+  /// The frame, if the drawing has one.
+  public var frame: CGRect? {
+    get { paper.frame }
+    set { paper.frame = newValue.map { $0.standardized.integral } }
+  }
+
+  /// What exports, prints, and copies cover: the frame, or else the drawing with a small margin.
+  public var exportArea: CGRect? {
+    if let frame = paper.frame { return frame }
+    let content = contentBounds
+    return content.isNull ? nil : content.insetBy(dx: -Paper.margin, dy: -Paper.margin).integral
+  }
 }
 
-/// The canvas a drawing is made on. It sets what is exported and printed; elements may reach
-/// past it, and are cut off at its edges.
+/// The canvas a drawing is made on. It's endless; an optional frame marks the part that is
+/// exported and printed, as an opened image's own edges do.
 public struct Paper: Equatable, Sendable {
-  public var width: CGFloat
-  public var height: CGFloat
-  /// `nil` is transparent.
+  /// The part exported and printed, or `nil` for the whole drawing.
+  public var frame: CGRect?
+  /// The canvas color, or `nil` for none: the canvas follows the appearance on screen and is
+  /// transparent in exports unless they add one.
   public var background: Color?
   /// Pixels per inch recorded in exported images, so a Retina screenshot keeps its size.
   public var resolution: CGFloat
 
-  public init(width: CGFloat = 1600, height: CGFloat = 1000, background: Color? = .white, resolution: CGFloat = 72) {
-    self.width = width
-    self.height = height
+  /// The space kept around the drawing when there's no frame.
+  public static let margin: CGFloat = 24
+
+  public init(frame: CGRect? = nil, background: Color? = nil, resolution: CGFloat = 72) {
+    self.frame = frame
     self.background = background
     self.resolution = resolution
   }

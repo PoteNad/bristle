@@ -215,13 +215,15 @@ extension CanvasView: @preconcurrency NSServicesMenuRequestor, NSDraggingSource 
     guard let window, let content = window.contentView else { return false }
     let inWindow = content.convert(event.locationInWindow, from: nil)
     guard !content.bounds.insetBy(dx: -2, dy: -2).contains(inWindow), !drawing.selection.isEmpty else { return false }
-    let ids = drawing.selection
     drawing.cancelGesture()
     interaction = .none
     updateGuides([])
-    let item = NSPasteboardItem()
+    // Cancelling an Option-drag removes the copies it made, so what's dragged is what's left.
+    let ids = drawing.selection.filter { scene.index(of: $0) != nil }
     let clip = clipping(ids)
     let area = clip.contentBounds.integral
+    guard !ids.isEmpty, !area.isNull, area.width > 0, area.height > 0 else { return true }
+    let item = NSPasteboardItem()
     var transparent = clip
     transparent.paper.background = nil
     item.setData(SceneFile.data(clip), forType: .bristleElements)

@@ -16,6 +16,8 @@ enum Interaction {
   case cropping(handle: Int, box: SelectionBox, original: Element)
   case erasing(path: [CGPoint], strokes: Bool)
   case textBox(start: CGPoint, current: CGPoint)
+  case frameMoving(start: CGPoint, original: CGRect)
+  case frameResizing(handle: Int, original: CGRect)
 }
 
 extension CanvasView {
@@ -26,7 +28,7 @@ extension CanvasView {
     let grid = configuration.snapsToGrid ? configuration.gridSpacing : nil
     guard !event.modifierFlags.contains(.command), configuration.snapsToGuides || grid != nil else { return nil }
     let near = scrollView.documentVisibleRect.insetBy(dx: -200 / magnification, dy: -200 / magnification)
-    var targets = [scene.paperRect]
+    var targets = scene.frame.map { [$0] } ?? []
     for element in scene.elements where !ids.contains(element.id) {
       let box = element.rotation == 0 ? element.frame : element.bounds
       if box.intersects(near) { targets.append(box) }
@@ -100,6 +102,22 @@ extension CanvasView {
 
   private func selectDown(_ p: CGPoint, _ event: NSEvent) {
     let shift = event.modifierFlags.contains(.shift)
+    // The frame is picked by its label, and then moved by it or resized by its handles.
+    if let frame = scene.frame {
+      if frameSelected, let handle = frameHandle(at: p, frame) {
+        drawing.beginGesture()
+        interaction = .frameResizing(handle: handle, original: frame)
+        return
+      }
+      if frameLabelRect(frame).contains(p) {
+        select([])
+        frameSelected = true
+        drawing.beginGesture()
+        interaction = .frameMoving(start: p, original: frame)
+        return
+      }
+    }
+    frameSelected = false
     if !shift, let handle = handle(at: p) {
       drawing.beginGesture()
       let originals = drawing.selectedElements
@@ -250,6 +268,15 @@ extension CanvasView {
       setNeedsDisplay(CGRect(boundingPoints: [start, current]).insetBy(dx: -2, dy: -2))
       interaction = .textBox(start: start, current: p)
       setNeedsDisplay(CGRect(boundingPoints: [start, p]).insetBy(dx: -2, dy: -2))
+    case .frameMoving(let start, let original):
+      let moved = original.offsetBy(dx: (p.x - start.x).rounded(), dy: (p.y - start.y).rounded())
+      drawing.live { $0.frame = moved }
+      needsDisplay = true
+    case .frameResizing(let handle, let original):
+      let box = SelectionBox(frame: original, rotation: 0)
+      let resized = resizedFrame(box, handle: handle, to: snapped(p, event: event), keepAspect: event.modifierFlags.contains(.shift), fromCenter: event.modifierFlags.contains(.option))
+      drawing.live { $0.frame = resized }
+      needsDisplay = true
     }
     autoscroll(with: event)
   }
@@ -558,6 +585,10 @@ extension CanvasView {
         erasing = []
         drawing.edit("Erase") { $0.delete(ids) }
       }
+    case .frameMoving:
+      drawing.endGesture("Move Frame")
+    case .frameResizing:
+      drawing.endGesture("Resize Frame")
     case .textBox(let start, let end):
       setNeedsDisplay(CGRect(boundingPoints: [start, end]).insetBy(dx: -2, dy: -2))
       let wide = abs(end.x - start.x) >= 20 / magnification
@@ -658,7 +689,7 @@ extension CanvasView {
     switch interaction {
     case .polygon(let points): finishPolygon(points)
     case .moving(_, _, let moved, _) where moved: drawing.cancelGesture()
-    case .resizing, .rotating, .point, .cropping: drawing.cancelGesture()
+    case .resizing, .rotating, .point, .cropping, .frameMoving, .frameResizing: drawing.cancelGesture()
     case .erasing(_, let strokes):
       if strokes { drawing.endGesture("Erase") }
       erasing = []

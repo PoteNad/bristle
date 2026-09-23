@@ -83,11 +83,12 @@ extension Scene {
 
   // MARK: Alignment
 
-  /// Lines up the elements, or a single element with the paper.
+  /// Lines up the elements, or a single element with the frame.
   public mutating func align(_ ids: Set<String>, _ alignment: Alignment) {
     let units = selectionUnits(ids)
     guard !units.isEmpty else { return }
-    let target = units.count == 1 ? paperRect : units.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
+    if units.count == 1 && frame == nil { return }
+    let target = units.count == 1 ? frame! : units.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
     for unit in units {
       let box = unit.bounds
       var dx: CGFloat = 0, dy: CGFloat = 0

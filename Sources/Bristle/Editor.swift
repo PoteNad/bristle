@@ -4,7 +4,8 @@ import BristleCore
 import UniformTypeIdentifiers
 
 /// A document window: every tool in the toolbar, as in Excalidraw, in capsules as in Freeform;
-/// the canvas; and the Palette in a sidebar that shares the window, like Plainst's symbols.
+/// the endless canvas; bars over its bottom edge for zoom, the style of what's drawn or
+/// selected, and the canvas's options; and the Palette in a sidebar, like Plainst's symbols.
 @MainActor
 final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, NSToolbarDelegate,
   NSSharingServicePickerToolbarItemDelegate, CanvasViewDelegate
@@ -13,9 +14,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   let palette = Palette()
   let zoomBar = ZoomBar()
   let canvasBar = CanvasBar()
+  let styleBar = StyleBar()
   private weak var note: BristleDocument?
   private(set) var toolGroups: [NSToolbarItemGroup] = []
-  private let root = NSView()
+  private let root = EditorView()
   private var paletteItem: NSSplitViewItem!
   private var inFullScreenTransition = false
   private var shownOnce = false
@@ -48,30 +50,20 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     canvas.styles = AppPreferences.toolStyles
     canvas.configuration = AppPreferences.canvasConfiguration
     canvas.tool = .select
-    // Fitting the canvas leaves room for the bars at the bottom.
-    canvas.fitInsets = NSEdgeInsets(top: 24, left: 24, bottom: 64, right: 24)
+    // Fitting the drawing leaves room for the bars at the bottom.
+    canvas.fitInsets = NSEdgeInsets(top: 32, left: 32, bottom: EditorView.margin * 2 + Bar.height, right: 32)
     palette.canvas = canvas
     palette.editor = self
     zoomBar.canvas = canvas
     canvasBar.canvas = canvas
     canvasBar.editor = self
+    styleBar.canvas = canvas
+    styleBar.editor = self
 
-    let scroll = canvas.scrollView
-    root.addSubview(scroll)
-    let overlays = [zoomBar.bar, canvasBar.bar]
-    overlays.forEach(root.addSubview)
-    for view in [scroll] + overlays { view.translatesAutoresizingMaskIntoConstraints = false }
-    let guide = root.safeAreaLayoutGuide
-    NSLayoutConstraint.activate([
-      scroll.topAnchor.constraint(equalTo: root.topAnchor),
-      scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-      scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-      scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-      zoomBar.bar.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
-      zoomBar.bar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
-      canvasBar.bar.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16),
-      canvasBar.bar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
-    ])
+    root.canvas = canvas.scrollView
+    root.zoom = zoomBar.bar
+    root.options = canvasBar.bar
+    root.style = styleBar.bar
     let controller = NSViewController()
     controller.view = root
     // The Palette shares the window beside the canvas, like Plainst's symbols sidebar.
@@ -82,7 +74,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     paletteItem.canCollapse = true
     paletteItem.minimumThickness = 260
     paletteItem.maximumThickness = 340
-    paletteItem.isCollapsed = !isAutomatedCheck && !UserDefaults.standard.bool(forKey: PreferenceKey.paletteVisible)
+    paletteItem.isCollapsed = isAutomatedCheck || !UserDefaults.standard.bool(forKey: PreferenceKey.paletteVisible)
     split.addSplitViewItem(paletteItem)
     if !isAutomatedCheck { split.splitView.autosaveName = "BristleEditorSplit" }
     window.contentViewController = split
@@ -101,20 +93,20 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   override func showWindow(_ sender: Any?) {
     super.showWindow(sender)
-    showPaperOnce()
+    showDrawingOnce()
   }
 
-  /// Opens showing the whole canvas, at actual size when it fits. Windows restored after a
+  /// Opens showing the whole drawing, at actual size when it fits. Windows restored after a
   /// relaunch appear without `showWindow`, so this also runs when a window first updates.
-  private func showPaperOnce() {
+  private func showDrawingOnce() {
     guard !shownOnce, let window, window.isVisible else { return }
     shownOnce = true
     window.contentView?.layoutSubtreeIfNeeded()
-    canvas.showPaper()
+    canvas.showDrawing()
     zoomBar.update()
   }
 
-  func windowDidUpdate(_ notification: Notification) { showPaperOnce() }
+  func windowDidUpdate(_ notification: Notification) { showDrawingOnce() }
 
   /// Automated checks must leave the user's saved window state alone.
   var isAutomatedCheck: Bool { AppPreferences.isAutomatedCheck }
@@ -176,21 +168,29 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   func canvasViewZoomDidChange(_ canvas: CanvasView) { zoomBar.update() }
 
-  func canvasView(_ canvas: CanvasView, didPick color: Color) { palette.update() }
+  func canvasView(_ canvas: CanvasView, didPick color: Color) {
+    palette.update()
+    styleBar.update()
+  }
 
   func canvasViewStylesDidChange(_ canvas: CanvasView) {
     AppPreferences.toolStyles = canvas.styles
     palette.update()
+    styleBar.update()
     NotificationCenter.default.post(name: .toolStylesDidChange, object: self)
   }
 
-  func canvasViewDidFinishInteraction(_ canvas: CanvasView) { palette.update() }
+  func canvasViewDidFinishInteraction(_ canvas: CanvasView) {
+    palette.update()
+    styleBar.update()
+  }
 
   /// Every window shares one set of tool styles.
   @objc private func stylesChangedElsewhere(_ notification: Notification) {
     guard notification.object as AnyObject? !== self else { return }
     canvas.styles = AppPreferences.toolStyles
     palette.update()
+    styleBar.update()
   }
 
   @objc private func defaultsDidChange() {
@@ -208,12 +208,15 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       MainActor.assumeIsolated {
         self?.paletteScheduled = false
         self?.palette.update()
+        self?.styleBar.update()
+        self?.canvasBar.update()
       }
     }
   }
 
   private func updateBars() {
     palette.update()
+    styleBar.update()
     zoomBar.update()
     canvasBar.update()
     updateToolGroups()
@@ -245,7 +248,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   private func slotDetails(_ slot: Slot) -> (symbol: String, label: String, tip: String) {
     switch slot {
     case .select: ("cursorarrow", "Select", "Select (V)")
-    case .draw: (lastBrush.symbol, "Draw", "Draw (P) — choose a pencil, brush, or highlighter in the Palette")
+    case .draw: (lastBrush.symbol, "Draw", "Draw (P)")
     case .eraser: ("eraser", "Eraser", "Eraser (E)")
     case .fill: ("drop", "Fill", "Fill (F)")
     case .rectangle: ("rectangle", "Rectangle", "Rectangle (R)")
@@ -427,7 +430,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   /// symbols sidebar does, without resizing the window.
   @objc func togglePalette(_ sender: Any?) {
     let show = paletteItem.isCollapsed
-    if show { palette.update() }
+    if show {
+      _ = palette.view
+      palette.update()
+    }
     // Checks look at the layout right away, so they skip the slide.
     guard !isAutomatedCheck else {
       paletteItem.isCollapsed = !show
@@ -468,30 +474,44 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
   }
 
-  /// Canvas ▸ Canvas Size: a sheet with the size and which way the canvas grows.
-  @objc func showCanvasSize(_ sender: Any?) {
+  /// Canvas ▸ Frame Size: a sheet with the frame's size, common sizes, and which way it grows.
+  @objc func showFrameSize(_ sender: Any?) {
     guard let window else { return }
-    let paper = canvas.scene.paper
+    let current = canvas.scene.frame?.size ?? canvas.scene.exportArea?.size ?? FrameSize.standard.size
     let alert = NSAlert()
-    alert.messageText = "Canvas Size"
-    alert.informativeText = "The drawing stays where it is; choose which part of the canvas it keeps its place in."
-    alert.addButton(withTitle: "Change")
+    alert.messageText = canvas.scene.frame == nil ? "Add a Frame" : "Frame Size"
+    alert.informativeText = "The frame is the part of the canvas that’s exported and printed. The drawing stays where it is."
+    alert.addButton(withTitle: canvas.scene.frame == nil ? "Add Frame" : "Change")
     alert.addButton(withTitle: "Cancel")
     let number = NumberFormatter()
     number.numberStyle = .decimal
     number.minimum = 1
     number.maximum = 30_000
     number.maximumFractionDigits = 0
-    let width = NSTextField(string: number.string(from: NSNumber(value: Double(paper.width))) ?? "")
-    let height = NSTextField(string: number.string(from: NSNumber(value: Double(paper.height))) ?? "")
+    let width = NSTextField(string: number.string(from: NSNumber(value: Double(current.width))) ?? "")
+    let height = NSTextField(string: number.string(from: NSNumber(value: Double(current.height))) ?? "")
     for field in [width, height] {
       field.formatter = number
       field.widthAnchor.constraint(equalToConstant: 80).isActive = true
     }
     width.setAccessibilityLabel("Width")
     height.setAccessibilityLabel("Height")
+    let presets = NSPopUpButton()
+    presets.addItem(withTitle: "Custom")
+    for size in FrameSize.allCases {
+      presets.addItem(withTitle: size.title)
+      presets.lastItem?.representedObject = size.rawValue
+    }
+    let presetTarget = ClosureTarget { _ in
+      guard let name = presets.selectedItem?.representedObject as? String, let size = FrameSize(rawValue: name) else { return }
+      width.stringValue = number.string(from: NSNumber(value: Double(size.size.width))) ?? ""
+      height.stringValue = number.string(from: NSNumber(value: Double(size.size.height))) ?? ""
+    }
+    presets.target = presetTarget
+    presets.action = #selector(ClosureTarget.fire(_:))
     let anchor = AnchorPicker()
     let grid = NSGridView(views: [
+      [NSTextField(labelWithString: "Size:"), presets],
       [NSTextField(labelWithString: "Width:"), width],
       [NSTextField(labelWithString: "Height:"), height],
       [NSTextField(labelWithString: "Anchor:"), anchor],
@@ -499,18 +519,33 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     grid.rowSpacing = 8
     grid.columnSpacing = 8
     grid.column(at: 0).xPlacement = .trailing
-    grid.row(at: 2).yPlacement = .top
+    grid.row(at: 3).yPlacement = .top
     grid.frame.size = grid.fittingSize
     alert.accessoryView = grid
     alert.window.initialFirstResponder = width
     alert.beginSheetModal(for: window) { [weak self] response in
       MainActor.assumeIsolated {
+        _ = presetTarget
         guard let self, response == .alertFirstButtonReturn,
           let w = number.number(from: width.stringValue)?.doubleValue,
           let h = number.number(from: height.stringValue)?.doubleValue
         else { return }
         let size = CGSize(width: w, height: h)
-        self.canvas.drawing.edit("Canvas Size") { $0.resizePaper(to: size, anchor: anchor.anchor) }
+        let name = self.canvas.scene.frame == nil ? "Add Frame" : "Frame Size"
+        self.canvas.drawing.edit(name) { $0.resizeFrame(to: size, anchor: anchor.anchor) }
+      }
+    }
+  }
+
+  /// Canvas ▸ Background: none, so the canvas follows the appearance and exports are
+  /// transparent; white; or any color.
+  @objc func chooseBackground(_ sender: NSMenuItem) {
+    switch sender.tag {
+    case 0: canvas.drawing.edit("Clear Background") { $0.paper.background = nil }
+    case 1: canvas.drawing.edit("Background") { $0.paper.background = .white }
+    default:
+      ColorPanelRelay.open(canvas.scene.paper.background ?? .white) { [weak canvas] color in
+        canvas?.drawing.coalesce("Background") { $0.paper.background = color }
       }
     }
   }
@@ -526,6 +561,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       menuItem.state = defaults.bool(forKey: PreferenceKey.snapsToGrid) ? .on : .off
     case #selector(toggleGuides(_:)):
       menuItem.state = defaults.bool(forKey: PreferenceKey.snapsToGuides) ? .on : .off
+    case #selector(chooseBackground(_:)):
+      let background = canvas.scene.paper.background
+      let chosen = background == nil ? 0 : background == .white ? 1 : 2
+      menuItem.state = menuItem.tag == chosen ? .on : .off
     case #selector(chooseTool(_:)):
       menuItem.state = (menuItem.representedObject as? String) == canvas.tool.rawValue ? .on : .off
     default: break
@@ -538,7 +577,50 @@ extension Notification.Name {
   static let toolStylesDidChange = Notification.Name("BristleToolStylesDidChange")
 }
 
-/// Nine buttons choosing where the drawing stays when the canvas changes size.
+/// The canvas under the window's bars: zoom at the bottom left, the canvas's options at the
+/// bottom right, and the style bar centred between them, raised above them when the window is
+/// too narrow for all three in a row.
+final class EditorView: NSView {
+  static let margin: CGFloat = 14
+  var canvas: NSView? { didSet { replace(oldValue, canvas, below: true) } }
+  var zoom: NSView? { didSet { replace(oldValue, zoom) } }
+  var options: NSView? { didSet { replace(oldValue, options) } }
+  var style: NSView? { didSet { replace(oldValue, style) } }
+
+  private func replace(_ old: NSView?, _ new: NSView?, below: Bool = false) {
+    old?.removeFromSuperview()
+    guard let new else { return }
+    new.translatesAutoresizingMaskIntoConstraints = true
+    if below { addSubview(new, positioned: .below, relativeTo: nil) } else { addSubview(new) }
+    needsLayout = true
+  }
+
+  override func layout() {
+    super.layout()
+    canvas?.frame = bounds
+    let margin = Self.margin
+    let inset = safeAreaInsets
+    var left = NSRect.zero, right = NSRect.zero
+    if let zoom {
+      let size = zoom.fittingSize
+      left = NSRect(x: inset.left + margin, y: inset.bottom + margin, width: size.width, height: size.height)
+      zoom.frame = left
+    }
+    if let options {
+      let size = options.fittingSize
+      right = NSRect(x: bounds.maxX - inset.right - margin - size.width, y: inset.bottom + margin, width: size.width, height: size.height)
+      options.frame = right
+    }
+    if let style, !style.isHidden {
+      let size = style.fittingSize
+      var frame = NSRect(x: ((bounds.width - size.width) / 2).rounded(), y: inset.bottom + margin, width: size.width, height: size.height)
+      if frame.minX < left.maxX + 8 || frame.maxX > right.minX - 8 { frame.origin.y = left.maxY + 8 }
+      style.frame = frame
+    }
+  }
+}
+
+/// Nine buttons choosing where the drawing stays when the frame changes size.
 final class AnchorPicker: NSView {
   private(set) var anchor: Scene.Anchor = .topLeft
   private var buttons: [NSButton] = []

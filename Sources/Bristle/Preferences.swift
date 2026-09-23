@@ -4,8 +4,6 @@ import BristleCore
 
 enum PreferenceKey {
   static let appearance = "appearance"
-  static let paperSize = "paperSize"
-  static let transparentBackground = "transparentBackground"
   static let snapsToGuides = "snapsToGuides"
   static let showsGrid = "showsGrid"
   static let snapsToGrid = "snapsToGrid"
@@ -38,8 +36,8 @@ enum AppAppearance: String, CaseIterable {
   }
 }
 
-/// Sizes for new drawings, in points.
-enum PaperSize: String, CaseIterable {
+/// Common frame sizes, in points, offered by Canvas ▸ Frame Size.
+enum FrameSize: String, CaseIterable {
   case standard, widescreen, laptop, square, letter, a4
 
   var title: String {
@@ -80,21 +78,18 @@ enum AppPreferences {
   }
 
   static let settingKeys = [
-    PreferenceKey.appearance, PreferenceKey.paperSize, PreferenceKey.transparentBackground,
-    PreferenceKey.snapsToGuides, PreferenceKey.gridSpacing, PreferenceKey.returnsToSelect,
+    PreferenceKey.appearance, PreferenceKey.snapsToGuides, PreferenceKey.gridSpacing, PreferenceKey.returnsToSelect,
   ]
 
   static func registerDefaults() {
     UserDefaults.standard.register(defaults: [
       PreferenceKey.appearance: AppAppearance.system.rawValue,
-      PreferenceKey.paperSize: PaperSize.standard.rawValue,
-      PreferenceKey.transparentBackground: false,
       PreferenceKey.snapsToGuides: true,
-      PreferenceKey.showsGrid: false,
+      PreferenceKey.showsGrid: true,
       PreferenceKey.snapsToGrid: false,
       PreferenceKey.gridSpacing: 20,
       PreferenceKey.returnsToSelect: false,
-      PreferenceKey.paletteVisible: true,
+      PreferenceKey.paletteVisible: false,
     ])
   }
 
@@ -103,17 +98,6 @@ enum AppPreferences {
   }
 
   @MainActor static func applyAppearance() { NSApp.appearance = appearance.value }
-
-  static var paperSize: PaperSize {
-    PaperSize(rawValue: UserDefaults.standard.string(forKey: PreferenceKey.paperSize) ?? "") ?? .standard
-  }
-
-  /// The paper new drawings start with.
-  static var newPaper: Paper {
-    let size = paperSize.size
-    let transparent = UserDefaults.standard.bool(forKey: PreferenceKey.transparentBackground)
-    return Paper(width: size.width, height: size.height, background: transparent ? nil : .white)
-  }
 
   static var gridSpacing: CGFloat {
     let value = UserDefaults.standard.double(forKey: PreferenceKey.gridSpacing)
@@ -154,8 +138,6 @@ enum AppPreferences {
 final class SettingsWindowController: NSWindowController {
   private let appearanceControl = NSSegmentedControl(
     labels: AppAppearance.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
-  private let paperSize = NSPopUpButton()
-  private let background = NSPopUpButton()
   private let gridSpacing = NSPopUpButton()
   private let guides = NSButton(checkboxWithTitle: "Snap to alignment guides", target: nil, action: nil)
   private let returnsToSelect = NSButton(
@@ -171,16 +153,11 @@ final class SettingsWindowController: NSWindowController {
     window.standardWindowButton(.miniaturizeButton)?.isEnabled = false
     window.standardWindowButton(.zoomButton)?.isEnabled = false
 
-    for size in PaperSize.allCases {
-      paperSize.addItem(withTitle: size.title)
-      paperSize.lastItem?.representedObject = size.rawValue
-    }
-    background.addItems(withTitles: ["White", "Transparent"])
     for spacing in [8, 10, 16, 20, 25, 32, 50] {
       gridSpacing.addItem(withTitle: "\(spacing) points")
       gridSpacing.lastItem?.tag = spacing
     }
-    for control in [appearanceControl, paperSize, background, gridSpacing, guides, returnsToSelect] as [NSControl] {
+    for control in [appearanceControl, gridSpacing, guides, returnsToSelect] as [NSControl] {
       control.target = self
       control.action = #selector(changeOption)
     }
@@ -190,16 +167,12 @@ final class SettingsWindowController: NSWindowController {
       control.setAccessibilityHelp(text)
     }
     describe(appearanceControl, "Follow the system appearance or always use Light or Dark. Drawings keep their own colors.")
-    describe(paperSize, "Choose the canvas size for new drawings. Canvas ▸ Canvas Size changes it for a drawing.")
-    describe(background, "Choose whether new drawings start on white or on a transparent canvas.")
-    describe(gridSpacing, "Set the spacing of the grid shown with View ▸ Show Grid.")
-    describe(guides, "While moving and resizing, line up edges and centers with other objects and the canvas. Hold ⌘ to place freely.")
+    describe(gridSpacing, "Set the spacing of the dots shown with View ▸ Show Grid.")
+    describe(guides, "While moving and resizing, line up edges and centers with other objects and the frame. Hold ⌘ to place freely.")
     describe(returnsToSelect, "After adding one shape, line, or text box, switch back to the Select tool instead of keeping the tool.")
 
     let generalGrid = NSGridView(views: [
-      [NSTextField(labelWithString: "Appearance:"), appearanceControl],
-      [NSTextField(labelWithString: "New canvas size:"), paperSize],
-      [NSTextField(labelWithString: "New canvas background:"), background],
+      [NSTextField(labelWithString: "Appearance:"), appearanceControl]
     ])
     let canvasGrid = NSGridView(views: [[NSTextField(labelWithString: "Grid spacing:"), gridSpacing]])
     for grid in [generalGrid, canvasGrid] {
@@ -257,8 +230,6 @@ final class SettingsWindowController: NSWindowController {
   private func sync() {
     let defaults = UserDefaults.standard
     appearanceControl.selectedSegment = AppAppearance.allCases.firstIndex(of: AppPreferences.appearance) ?? 0
-    paperSize.selectItem(withTitle: AppPreferences.paperSize.title)
-    background.selectItem(at: defaults.bool(forKey: PreferenceKey.transparentBackground) ? 1 : 0)
     gridSpacing.selectItem(withTag: Int(AppPreferences.gridSpacing))
     guides.state = defaults.bool(forKey: PreferenceKey.snapsToGuides) ? .on : .off
     returnsToSelect.state = defaults.bool(forKey: PreferenceKey.returnsToSelect) ? .on : .off
@@ -269,10 +240,6 @@ final class SettingsWindowController: NSWindowController {
     if AppAppearance.allCases.indices.contains(appearanceControl.selectedSegment) {
       defaults.set(AppAppearance.allCases[appearanceControl.selectedSegment].rawValue, forKey: PreferenceKey.appearance)
     }
-    if let size = paperSize.selectedItem?.representedObject as? String {
-      defaults.set(size, forKey: PreferenceKey.paperSize)
-    }
-    defaults.set(background.indexOfSelectedItem == 1, forKey: PreferenceKey.transparentBackground)
     if let spacing = gridSpacing.selectedItem?.tag, spacing > 0 { defaults.set(spacing, forKey: PreferenceKey.gridSpacing) }
     defaults.set(guides.state == .on, forKey: PreferenceKey.snapsToGuides)
     defaults.set(returnsToSelect.state == .on, forKey: PreferenceKey.returnsToSelect)

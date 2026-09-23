@@ -25,7 +25,7 @@ final class BristleDocument: NSDocument {
 
   override init() {
     super.init()
-    drawing.replace(Scene(paper: AppPreferences.newPaper))
+    drawing.replace(Scene())
     drawing.undoManager = undoManager
   }
 
@@ -85,17 +85,17 @@ final class BristleDocument: NSDocument {
     }
   }
 
-  /// A drawing of one image: the canvas is the image's size, with the image locked in place.
+  /// A drawing of one image: the frame is the image's edges, with the image locked in place.
   nonisolated static func imageScene(_ data: Data, type: String) throws -> Scene {
     guard let size = ImageStore.pixelSize(of: data), size.width >= 1, size.height >= 1,
       ImageStore.decode(data) != nil
     else { throw CocoaError(.fileReadCorruptFile) }
     let file = ImageFile(type: type, data: data)
-    var scene = Scene(paper: Paper(width: size.width, height: size.height, background: nil))
-    scene.paper.resolution = ImageStore.resolution(of: data) ?? 72
+    let frame = CGRect(origin: .zero, size: size)
+    var scene = Scene(paper: Paper(frame: frame, resolution: ImageStore.resolution(of: data) ?? 72))
     var image = Element(kind: .image)
     image.file = scene.addFile(file)
-    image.frame = scene.paperRect
+    image.frame = frame
     image.locked = true
     scene.elements = [image]
     return scene
@@ -192,8 +192,8 @@ final class BristleDocument: NSDocument {
     info.verticalPagination = .fit
     info.isHorizontallyCentered = true
     info.isVerticallyCentered = true
-    let paper = drawing.scene.paperRect
-    info.orientation = paper.width > paper.height ? .landscape : .portrait
+    let area = drawing.scene.exportArea ?? .zero
+    info.orientation = area.width > area.height ? .landscape : .portrait
     let view = PrintView(scene: drawing.scene)
     let operation = NSPrintOperation(view: view, printInfo: info)
     operation.jobTitle = baseName
@@ -327,7 +327,9 @@ final class PrintView: NSView {
 
   init(scene: Scene) {
     self.scene = scene
-    super.init(frame: scene.paperRect)
+    let area = scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+    super.init(frame: CGRect(origin: .zero, size: area.size))
+    setBoundsOrigin(area.origin)
   }
 
   required init?(coder: NSCoder) { fatalError() }
@@ -336,7 +338,7 @@ final class PrintView: NSView {
 
   override func draw(_ dirtyRect: NSRect) {
     guard let context = NSGraphicsContext.current?.cgContext else { return }
-    context.clip(to: scene.paperRect)
+    context.clip(to: bounds)
     Renderer.draw(scene, in: context, rect: dirtyRect, images: images)
   }
 

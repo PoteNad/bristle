@@ -104,6 +104,23 @@ extension CanvasView {
     return nil
   }
 
+  /// Which of the picked frame's handles is under a point.
+  func frameHandle(at point: CGPoint, _ frame: CGRect) -> Int? {
+    let reach = handleSize / 2 + 3 / magnification
+    let box = SelectionBox(frame: frame, rotation: 0)
+    return (0..<8).first { i in
+      let p = box.point(SelectionBox.units[i])
+      return abs(p.x - point.x) <= reach && abs(p.y - point.y) <= reach
+    }
+  }
+
+  func drawFrameHandles(_ frame: CGRect, in context: CGContext, scale: CGFloat) {
+    let box = SelectionBox(frame: frame, rotation: 0)
+    for i in 0..<8 {
+      drawHandle(at: box.point(SelectionBox.units[i]), round: false, in: context, scale: scale, color: NSColor.controlAccentColor.cgColor)
+    }
+  }
+
   // MARK: Drawing the selection
 
   func drawSelection(in context: CGContext, scale: CGFloat) {

@@ -216,7 +216,8 @@ extension CanvasView: NSMenuItemValidation {
         }
         scene[target.id] = e
       }
-    } else if scene.paperRect.contains(p) {
+    } else {
+      // Filling empty canvas colors the whole canvas, as MS Paint fills its page.
       drawing.edit(clear ? "Clear Background" : "Fill Background") { $0.paper.background = color }
     }
   }
@@ -234,7 +235,9 @@ extension CanvasView: NSMenuItemValidation {
       context.scaleBy(x: 1, y: -1)
       context.translateBy(x: -p.x + 0.5, y: -p.y + 0.5)
       let area = CGRect(x: p.x - 1, y: p.y - 1, width: 2, height: 2)
-      Renderer.draw(scene, in: context, rect: area, images: images, paper: scene.paperRect.contains(p))
+      context.setFillColor(canvasColor)
+      context.fill(area)
+      Renderer.draw(scene, in: context, rect: area, images: images)
       return true
     }
     guard rendered, pixel[3] > 0 else { return nil }
@@ -266,6 +269,11 @@ extension CanvasView: NSMenuItemValidation {
   // MARK: Editing commands
 
   func deleteSelection(_ name: String) {
+    if frameSelected {
+      frameSelected = false
+      drawing.edit("Remove Frame") { $0.frame = nil }
+      return
+    }
     let ids = drawing.selection.filter { scene[$0]?.locked == false }
     guard !ids.isEmpty else { return }
     drawing.edit(name, select: []) { $0.delete(ids) }
@@ -358,21 +366,43 @@ extension CanvasView: NSMenuItemValidation {
 
   // MARK: Canvas
 
+  /// Frame ▸ Frame Selection: the frame fits the selection.
   @objc public func cropToSelection(_ sender: Any?) {
     let box = scene.bounds(of: drawing.selection)
     guard !box.isNull else { return }
-    drawing.edit("Crop to Selection") { $0.crop(to: box) }
+    drawing.edit(scene.frame == nil ? "Add Frame" : "Frame Selection") { $0.crop(to: box) }
+  }
+
+  /// Adds a frame around the drawing, or around what's in view when there's nothing yet.
+  @objc public func addFrame(_ sender: Any?) {
+    guard scene.frame == nil else { return }
+    let visible = scrollView.documentVisibleRect
+    let fallback = visible.insetBy(dx: visible.width * 0.15, dy: visible.height * 0.15)
+    drawing.edit("Add Frame") { scene in
+      if scene.contentBounds.isNull { scene.crop(to: fallback) } else { scene.fitFrameToDrawing() }
+    }
+    frameSelected = true
+  }
+
+  @objc public func removeFrame(_ sender: Any?) {
+    guard scene.frame != nil else { return }
+    frameSelected = false
+    drawing.edit("Remove Frame") { $0.frame = nil }
+  }
+
+  @objc public func toggleFrame(_ sender: Any?) {
+    if scene.frame == nil { addFrame(sender) } else { removeFrame(sender) }
   }
 
   @objc public func fitCanvasToDrawing(_ sender: Any?) {
     guard !scene.elements.isEmpty else { return }
-    drawing.edit("Fit Canvas to Drawing") { $0.fitPaperToDrawing() }
+    drawing.edit(scene.frame == nil ? "Add Frame" : "Fit Frame to Drawing") { $0.fitFrameToDrawing() }
   }
 
-  @objc public func rotateCanvasLeft(_ sender: Any?) { drawing.edit("Rotate Canvas") { $0.rotatePaper(clockwise: false) } }
-  @objc public func rotateCanvasRight(_ sender: Any?) { drawing.edit("Rotate Canvas") { $0.rotatePaper(clockwise: true) } }
-  @objc public func flipCanvasHorizontal(_ sender: Any?) { drawing.edit("Flip Canvas") { $0.flipPaper(.horizontal) } }
-  @objc public func flipCanvasVertical(_ sender: Any?) { drawing.edit("Flip Canvas") { $0.flipPaper(.vertical) } }
+  @objc public func rotateCanvasLeft(_ sender: Any?) { drawing.edit("Rotate Drawing") { $0.rotateDrawing(clockwise: false) } }
+  @objc public func rotateCanvasRight(_ sender: Any?) { drawing.edit("Rotate Drawing") { $0.rotateDrawing(clockwise: true) } }
+  @objc public func flipCanvasHorizontal(_ sender: Any?) { drawing.edit("Flip Drawing") { $0.flipDrawing(.horizontal) } }
+  @objc public func flipCanvasVertical(_ sender: Any?) { drawing.edit("Flip Drawing") { $0.flipDrawing(.vertical) } }
 
   // MARK: Style
 
@@ -463,6 +493,7 @@ extension CanvasView: NSMenuItemValidation {
     case #selector(redo(_:)):
       item.title = undoManager?.redoMenuItemTitle ?? "Redo"
       return undoManager?.canRedo ?? false
+    case #selector(delete(_:)) where frameSelected: return true
     case #selector(delete(_:)), #selector(cut(_:)), #selector(bringToFront(_:)), #selector(bringForward(_:)),
       #selector(sendBackward(_:)), #selector(sendToBack(_:)), #selector(lock(_:)), #selector(flipHorizontal(_:)),
       #selector(flipVertical(_:)), #selector(rotateLeft(_:)), #selector(rotateRight(_:)), #selector(pasteStyle(_:)):
@@ -479,6 +510,14 @@ extension CanvasView: NSMenuItemValidation {
     case #selector(unlockAll(_:)): return scene.elements.contains(where: \.locked)
     case #selector(paste(_:)): return canPaste(NSPasteboard.general)
     case #selector(fitCanvasToDrawing(_:)): return !scene.elements.isEmpty
+    case #selector(removeFrame(_:)): return scene.frame != nil
+    case #selector(addFrame(_:)): return scene.frame == nil
+    case #selector(toggleFrame(_:)):
+      item.title = scene.frame == nil ? "Add Frame" : "Remove Frame"
+      return true
+    case #selector(rotateCanvasLeft(_:)), #selector(rotateCanvasRight(_:)), #selector(flipCanvasHorizontal(_:)),
+      #selector(flipCanvasVertical(_:)):
+      return !scene.elements.isEmpty
     case #selector(zoomIn(_:)): return magnification < scrollView.maxMagnification - 0.001
     case #selector(zoomOut(_:)): return magnification > scrollView.minMagnification + 0.001
     case #selector(selectAll(_:)): return !pickableElements.isEmpty

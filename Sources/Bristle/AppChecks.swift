@@ -55,6 +55,12 @@
       fflush(stdout)
     }
 
+    /// The middle of what the canvas shows.
+    static func middle(_ canvas: CanvasView) -> CGPoint {
+      let visible = canvas.visibleRect
+      return CGPoint(x: visible.midX.rounded(), y: visible.midY.rounded())
+    }
+
     static func after(_ seconds: Double, _ body: @escaping @MainActor () -> Void) {
       DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { MainActor.assumeIsolated(body) }
     }
@@ -192,9 +198,9 @@
           tools == ["Select", "Draw", "Eraser", "Fill", "Rectangle", "Ellipse", "Polygon", "Line", "Arrow", "Text", "Image"],
           editor.currentSlot == .select
         else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
-        guard editor.paletteVisible, editor.palette.sectionTitles.first == "Canvas", !editor.zoomBar.bar.isHidden else {
-          fail("a new window should show the Palette with the canvas's settings: \(editor.palette.sectionTitles)")
-        }
+        guard !editor.paletteVisible, editor.styleBar.bar.isHidden, !editor.zoomBar.bar.isHidden,
+          !editor.canvasBar.bar.isHidden, document.drawing.scene.frame == nil
+        else { fail("a new window should show an endless canvas with only the zoom and canvas bars") }
         controller.newWindowForTab(nil)
         after(1) {
           guard controller.documents.count == 2, windows[0].tabbedWindows?.count == 2 else {
@@ -217,7 +223,7 @@
         let document = firstDocument(controller)
         let canvas = document.editor!.canvas
         canvas.tool = .rectangle
-        let start = canvas.scene.paperRect.center
+        let start = middle(canvas)
         drag(line(from: start, to: CGPoint(x: start.x + 160, y: start.y + 90)), in: canvas)
         canvas.tool = .pen
         drag(line(from: CGPoint(x: start.x - 200, y: start.y), to: CGPoint(x: start.x - 20, y: start.y + 60), steps: 30), in: canvas)
@@ -242,8 +248,8 @@
                 if let error { fail("saving a PNG failed: \(error)") }
                 guard let data = FileManager.default.contents(atPath: png.path), let embedded = EmbeddedScene(png: data),
                   embedded.isCurrent, embedded.scene.elements.map(\.id) == drawn.elements.map(\.id),
-                  ImageStore.pixelSize(of: data) == CGSize(width: drawn.paper.width, height: drawn.paper.height)
-                else { fail("the PNG should be the canvas's size and carry the drawing") }
+                  ImageStore.pixelSize(of: data) == drawn.exportArea?.size
+                else { fail("the PNG should cover the drawing and carry it") }
                 pass("drawings save as readable .bristle JSON and as PNGs that carry the drawing")
                 finish()
               }
@@ -264,9 +270,9 @@
         else { fail("opening a file at launch should leave only that file, found \(documents.map(\.displayName))") }
         let scene = documents[0].drawing.scene
         guard scene.elements.count == 1, scene.elements[0].kind == .image, scene.elements[0].locked,
-          scene.paper.background == nil
-        else { fail("an image should open as the canvas, locked in place") }
-        pass("opening an image at launch leaves no untitled window, and the image becomes the canvas")
+          scene.paper.background == nil, scene.frame == scene.elements[0].frame
+        else { fail("an image should open framed by its own edges, locked in place") }
+        pass("opening an image at launch leaves no untitled window, and the image's edges become the frame")
         finish()
       }
     }
@@ -306,7 +312,7 @@
     private static func staleCheck(_ folder: String, _ controller: BristleDocumentController) {
       // A Bristle PNG whose drawing chunk was carried onto different pixels, as an editor that
       // ignores the PNG rules would leave it.
-      var scene = Scene(paper: Paper(width: 300, height: 200))
+      var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 300, height: 200)))
       var box = Element(kind: .rectangle)
       box.frame = CGRect(x: 20, y: 20, width: 100, height: 60)
       var ring = Element(kind: .ellipse)
@@ -366,10 +372,10 @@
         let document = firstDocument(controller)
         let canvas = document.editor!.canvas
         canvas.tool = .ellipse
-        let c = canvas.scene.paperRect.center
+        let c = middle(canvas)
         drag(line(from: c, to: CGPoint(x: c.x + 120, y: c.y + 80)), in: canvas)
         guard canvas.scene.elements.count == 1 else {
-          fail("drawing an ellipse failed: visible \(canvas.visibleRect), paper \(canvas.scene.paperRect), tool \(canvas.tool), window \(String(describing: canvas.window?.frame))")
+          fail("drawing an ellipse failed: visible \(canvas.visibleRect), tool \(canvas.tool), window \(String(describing: canvas.window?.frame))")
         }
         // Quitting keeps the unsaved drawing as a draft, as AppKit does for every document app.
         NSApp.terminate(nil)
@@ -396,7 +402,20 @@
         let editor = document.editor!
         let canvas = editor.canvas
         let undo = document.undoManager!
-        let c = canvas.scene.paperRect.center
+        // The drags below reach far, so they stay inside the window at this zoom.
+        canvas.zoom(to: 0.6)
+        let c = middle(canvas)
+        @MainActor func press(_ button: NSView) {
+          button.window?.contentView?.layoutSubtreeIfNeeded()
+          click(CGPoint(x: button.bounds.midX, y: button.bounds.midY), in: button)
+        }
+        @MainActor func barButton(_ bar: Bar, _ tip: String) -> NSButton {
+          editor.window?.contentView?.layoutSubtreeIfNeeded()
+          guard let button = bar.buttons.first(where: { $0.toolTip?.hasPrefix(tip) == true }) else {
+            fail("the \(bar.accessibilityLabel() ?? "") bar should have \(tip): \(bar.buttons.compactMap(\.toolTip))")
+          }
+          return button
+        }
 
         // Every tool in the toolbar acts when clicked: the toolbar sends each tool's own action.
         for group in editor.toolGroups {
@@ -408,25 +427,47 @@
             }
           }
         }
+        // Draw shows the brushes, widths, and color in the bar at the bottom, and they respond to clicks.
         editor.choose(.draw)
-        guard [.pencil, .pen, .highlighter].contains(canvas.tool), editor.palette.sectionTitles.contains("Brush") else {
-          fail("Draw should choose a brush and show its settings: \(editor.palette.sectionTitles)")
+        guard [.pencil, .pen, .highlighter].contains(canvas.tool), !editor.styleBar.bar.isHidden else {
+          fail("Draw should choose a brush and show the style bar")
         }
-        canvas.tool = .pen
+        press(barButton(editor.styleBar.bar, "Pencil"))
+        guard canvas.tool == .pencil, (barButton(editor.styleBar.bar, "Pencil") as? BarButton)?.isOn == true else {
+          fail("clicking Pencil in the bar should choose the pencil")
+        }
+        press(barButton(editor.styleBar.bar, "Brush"))
+        press(barButton(editor.styleBar.bar, "Bold"))
+        guard canvas.tool == .pen, canvas.style.strokeWidth == Controls.widths(for: .pen)[2] else {
+          fail("clicking Brush and Bold in the bar should choose the brush at its boldest, got \(canvas.tool) \(canvas.style.strokeWidth)")
+        }
+        press(barButton(editor.styleBar.bar, "Medium"))
         editor.choose(.select)
-        guard editor.palette.sectionTitles.first == "Canvas" else { fail("Select with nothing selected should show the canvas") }
-        // The brush button slides the Palette away and back.
+        guard editor.styleBar.bar.isHidden else { fail("Select with nothing selected should hide the style bar") }
+        // The brush button slides the Palette in and away.
         guard let brush = editor.window?.toolbar?.items.first(where: { $0.itemIdentifier == Editor.paletteToolbarItem }),
           let action = brush.action
         else { fail("the toolbar should have the Palette button") }
         NSApp.sendAction(action, to: brush.target, from: brush)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
-        guard !editor.paletteVisible else { fail("the brush button should hide the Palette") }
+        guard editor.paletteVisible, editor.palette.sectionTitles.first == "Canvas" else {
+          fail("the brush button should show the Palette with the canvas's settings: \(editor.palette.sectionTitles)")
+        }
+        let before = middle(canvas)
         NSApp.sendAction(action, to: brush.target, from: brush)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
-        guard editor.paletteVisible else { fail("the brush button should show the Palette again") }
+        guard !editor.paletteVisible else { fail("the brush button should hide the Palette again") }
+        guard abs(middle(canvas).x - before.x) < 2, abs(middle(canvas).y - before.y) < 2 else {
+          fail("the view should stay centred on the same place when the Palette comes and goes: \(before) → \(middle(canvas))")
+        }
+        // After the view resizes, moving it elsewhere sticks.
+        canvas.center(on: CGPoint(x: before.x + 50, y: before.y + 30))
+        guard abs(middle(canvas).x - before.x - 50) < 2, abs(middle(canvas).y - before.y - 30) < 2 else {
+          fail("centring the view after it resized should stick, got \(middle(canvas))")
+        }
+        canvas.center(on: before)
         editor.choose(.draw)
-        pass("every toolbar tool responds to clicks, and the brush button shows and hides the Palette")
+        pass("every toolbar tool and the drawing bar respond to clicks, and the Palette comes and goes without moving the view")
 
         // Draw, undo, redo.
         let points = (0...40).map { CGPoint(x: c.x - 200 + CGFloat($0) * 8, y: c.y + sin(CGFloat($0) / 5) * 40) }
@@ -461,22 +502,29 @@
         guard canvas.drawing.selection.isEmpty else { fail("clicking inside an unfilled rectangle shouldn't select it") }
         click(CGPoint(x: box.minX + 40, y: box.minY), in: canvas)
         guard canvas.drawing.selection == [rect.id] else { fail("clicking a rectangle's edge should select it") }
-        editor.palette.update()
-        guard editor.palette.sectionTitles.first == "Rectangle" else {
-          fail("selecting a rectangle should show its settings: \(editor.palette.sectionTitles)")
-        }
-        // A real click on a swatch in the Palette colors the selection.
-        editor.window?.contentView?.layoutSubtreeIfNeeded()
-        guard let red = allButtons(in: editor.palette.view).first(where: { $0.toolTip == "Red" }) else {
-          fail("the Palette should offer red")
-        }
-        click(CGPoint(x: red.bounds.midX, y: red.bounds.midY), in: red)
+        editor.styleBar.update()
+        guard !editor.styleBar.bar.isHidden else { fail("selecting a rectangle should show the style bar") }
+        // A real click on the stroke swatch opens the colors above it; a click on red colors the selection.
+        press(barButton(editor.styleBar.bar, "Stroke Color"))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        guard let popover = editor.styleBar.popover, popover.isShown, let colors = popover.contentViewController?.view,
+          let red = allButtons(in: colors).first(where: { $0.toolTip == "Red" })
+        else { fail("clicking the stroke swatch should show the colors") }
+        let swatchTop = barButton(editor.styleBar.bar, "Stroke Color").window!.convertToScreen(
+          barButton(editor.styleBar.bar, "Stroke Color").convert(barButton(editor.styleBar.bar, "Stroke Color").bounds, to: nil)).maxY
+        guard let popoverWindow = colors.window, popoverWindow.frame.minY >= swatchTop - 1,
+          let editorWindow = editor.window, editorWindow.frame.contains(popoverWindow.frame)
+        else { fail("the colors should open above the bar, inside the window") }
+        press(red)
         guard canvas.scene[rect.id]?.stroke == Color(hex: "#FF3B30") else {
-          let point = red.convert(NSPoint(x: red.bounds.midX, y: red.bounds.midY), to: nil)
-          let hit = red.window?.contentView?.superview?.hitTest(point)
-          fail("clicking red in the Palette should color the rectangle: hit \(String(describing: hit)), frame \(red.convert(red.bounds, to: nil)), selection \(canvas.drawing.selection), in window \(red.window != nil)")
+          fail("clicking red should color the rectangle, got \(String(describing: canvas.scene[rect.id]?.stroke))")
         }
+        popover.close()
         undo.undo()
+        press(barButton(editor.styleBar.bar, "Bold"))
+        guard canvas.scene[rect.id]?.strokeWidth == Controls.widths(for: .line)[2] else { fail("clicking Bold should thicken the rectangle") }
+        undo.undo()
+        pass("the style bar changes a selection's color and width with real clicks, its colors opening above it")
         drag(line(from: CGPoint(x: box.minX + 40, y: box.minY), to: CGPoint(x: box.minX + 77, y: box.minY + 23)), in: canvas, flags: .command)
         guard same(canvas.scene[rect.id]?.frame, box.offsetBy(dx: 37, dy: 23)) else {
           fail("dragging should move the rectangle, got \(String(describing: canvas.scene[rect.id]?.frame))")
@@ -534,8 +582,8 @@
         // Text: click to type, then the text is an element.
         canvas.tool = .text
         click(CGPoint(x: c.x - 300, y: c.y - 150), in: canvas)
-        guard let editor = canvas.textEditor else { fail("clicking with the text tool should start typing") }
-        editor.insertText("Hello, Bristle", replacementRange: editor.selectedRange())
+        guard let typing = canvas.textEditor else { fail("clicking with the text tool should start typing") }
+        typing.insertText("Hello, Bristle", replacementRange: typing.selectedRange())
         grouped(undo) {
           canvas.window?.makeFirstResponder(canvas)
           canvas.endTextEditing()
@@ -558,6 +606,30 @@
         }
         pass("the fill tool fills shapes and the eyedropper picks colors")
 
+        // The frame: the bar's button adds one; it's picked by its label, moved, and removed.
+        canvas.tool = .select
+        canvas.select([])
+        press(barButton(editor.canvasBar.bar, "Add a frame"))
+        guard let frame = canvas.scene.frame else { fail("the frame button should add a frame") }
+        editor.canvasBar.update()
+        guard editor.canvasBar.frame.isOn else { fail("the frame button should show it's on") }
+        let label = canvas.frameLabelRect(frame)
+        drag(line(from: label.center, to: CGPoint(x: label.midX + 40, y: label.midY + 30)), in: canvas)
+        guard canvas.frameSelected, same(canvas.scene.frame, frame.offsetBy(dx: 40, dy: 30)) else {
+          fail("dragging the frame's label should pick and move it, got \(String(describing: canvas.scene.frame))")
+        }
+        editor.styleBar.update()
+        guard !editor.styleBar.bar.isHidden else { fail("a picked frame should show its size in the bar") }
+        _ = barButton(editor.styleBar.bar, "Frame Size")
+        canvas.window?.makeFirstResponder(canvas)
+        key("\u{7F}", code: 51)
+        guard canvas.scene.frame == nil else { fail("Delete should remove a picked frame") }
+        undo.undo()
+        guard canvas.scene.frame != nil else { fail("undo should bring the frame back") }
+        press(barButton(editor.canvasBar.bar, "Remove the frame"))
+        guard canvas.scene.frame == nil else { fail("the frame button should remove the frame") }
+        pass("the frame is added from the bar, picked and moved by its label, and removed with Delete or the bar")
+
         document.updateChangeCount(.changeCleared)
         finish()
       }
@@ -569,7 +641,7 @@
       after(1.5) {
         let document = firstDocument(controller)
         let canvas = document.editor!.canvas
-        var scene = Scene(paper: Paper(width: 8000, height: 6000))
+        var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 8000, height: 6000)))
         var seed: UInt64 = 7
         @MainActor func random() -> CGFloat {
           seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
@@ -591,7 +663,7 @@
         }
         canvas.drawing.replace(scene)
         canvas.zoom(to: 1)
-        canvas.center(on: scene.paperRect.center)
+        canvas.center(on: CGPoint(x: 4000, y: 3000))
         @MainActor func redraw() -> Double {
           let start = CACurrentMediaTime()
           canvas.setNeedsDisplay(canvas.visibleRect)
@@ -601,9 +673,9 @@
         _ = redraw()
         let actual = (0..<5).map { _ in redraw() }.sorted()[2]
         canvas.tool = .pen
-        // Choosing the tool shows the Palette, which redraws the window once; the stroke is timed after.
+        // Choosing the tool shows the style bar, which redraws the window once; the stroke is timed after.
         canvas.window?.displayIfNeeded()
-        let c = scene.paperRect.center
+        let c = CGPoint(x: 4000, y: 3000)
         var slowest = 0.0
         send(.leftMouseDown, at: c, in: canvas)
         for i in 1...200 {
@@ -654,6 +726,11 @@
             let text = c.scene.elements.first { $0.kind == .text }!
             c.beginTextEditing(text.id)
           }
+          if environment["BRISTLE_FRAME"] == "1" {
+            target.canvas.select([])
+            target.canvas.addFrame(nil)
+            target.canvas.zoomToFit(nil)
+          }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
           if environment["BRISTLE_SELECT"] == "nothing" { target.canvas.select([]) }
           if let kind = environment["BRISTLE_SELECT"].flatMap(Element.Kind.init(rawValue:)),
@@ -678,7 +755,7 @@
 
     /// A small drawing of each kind of object, for screenshots.
     static func demo(_ canvas: CanvasView) {
-      var scene = Scene(paper: Paper(width: 1400, height: 900))
+      var scene = Scene()
       @MainActor func add(_ e: Element) { scene.elements.append(e) }
       var sky = Element(kind: .rectangle)
       sky.frame = CGRect(x: 120, y: 120, width: 420, height: 280)
@@ -743,7 +820,7 @@
       canvas.drawing.replace(scene)
       canvas.tool = .select
       canvas.drawing.selection = [ink.id]
-      canvas.showPaper()
+      canvas.showDrawing()
     }
   }
 #endif

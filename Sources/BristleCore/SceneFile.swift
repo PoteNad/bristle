@@ -29,7 +29,7 @@ public enum SceneFile {
       ("version", JSON.number(CGFloat(version)).text),
     ]
     for (key, value) in extra { members.append((key, value.text)) }
-    members.append(("paper", paperJSON(scene.paper).text))
+    members.append(("canvas", paperJSON(scene.paper).text))
     let elements = scene.elements.map { "    " + elementJSON($0).text }
     members.append(("elements", elements.isEmpty ? "[]" : "[\n" + elements.joined(separator: ",\n") + "\n  ]"))
     let files = scene.files.keys.sorted().map { id -> String in
@@ -59,7 +59,9 @@ public enum SceneFile {
     let version = (object["version"] as? NSNumber)?.intValue ?? 1
     guard version <= Self.version else { throw ReadError.newerVersion(version) }
     var scene = Scene()
-    if let paper = object["paper"] as? [String: Any] { scene.paper = readPaper(paper) }
+    if let canvas = object["canvas"] as? [String: Any] ?? object["paper"] as? [String: Any] {
+      scene.paper = readPaper(canvas)
+    }
     scene.elements = (object["elements"] as? [Any] ?? []).compactMap { ($0 as? [String: Any]).flatMap(readElement) }
     for (id, value) in object["files"] as? [String: Any] ?? [:] {
       guard let entry = value as? [String: Any], let type = entry["type"] as? String,
@@ -73,8 +75,11 @@ public enum SceneFile {
   // MARK: Writing
 
   static func paperJSON(_ paper: Paper) -> JSON {
-    var members: [(String, JSON)] = [("width", .number(paper.width)), ("height", .number(paper.height))]
+    var members: [(String, JSON)] = []
     members.append(("background", paper.background.map { .string($0.hex) } ?? .null))
+    if let frame = paper.frame {
+      members.append(("frame", .array([frame.minX, frame.minY, frame.width, frame.height].map { .number($0) })))
+    }
     if paper.resolution != 72 { members.append(("resolution", .number(paper.resolution))) }
     return .object(members)
   }
@@ -148,12 +153,12 @@ public enum SceneFile {
 
   static func readPaper(_ object: [String: Any]) -> Paper {
     var paper = Paper()
-    if let width = number(object["width"]), width >= 1 { paper.width = width }
-    if let height = number(object["height"]), height >= 1 { paper.height = height }
-    if object["background"] is NSNull {
-      paper.background = nil
-    } else if let hex = object["background"] as? String {
-      paper.background = Color(hex: hex) ?? .white
+    if let hex = object["background"] as? String { paper.background = Color(hex: hex) }
+    if let values = (object["frame"] as? [Any])?.compactMap(number), values.count == 4, values[2] >= 1, values[3] >= 1 {
+      paper.frame = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+    } else if let width = number(object["width"]), let height = number(object["height"]), width >= 1, height >= 1 {
+      // Early drawings had a page at the origin.
+      paper.frame = CGRect(x: 0, y: 0, width: width, height: height)
     }
     if let resolution = number(object["resolution"]), resolution > 0 { paper.resolution = resolution }
     return paper

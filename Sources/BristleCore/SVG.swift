@@ -4,8 +4,8 @@ import Foundation
 
 /// Writes a scene as SVG: shapes and strokes as paths, text as text, and images embedded.
 public enum SVG {
-  public static func document(_ scene: Scene, area: CGRect? = nil) -> Data {
-    let area = area ?? scene.paperRect
+  public static func document(_ scene: Scene, area: CGRect? = nil, background: Color? = nil) -> Data {
+    let area = area ?? scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
     var out = """
       <?xml version="1.0" encoding="UTF-8"?>
       <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" \
@@ -14,9 +14,8 @@ public enum SVG {
 
       """
     out += "<defs><clipPath id=\"paper\"><rect x=\"\(n(area.minX))\" y=\"\(n(area.minY))\" width=\"\(n(area.width))\" height=\"\(n(area.height))\"/></clipPath></defs>\n"
-    if let background = scene.paper.background {
-      let paper = scene.paperRect.intersection(area)
-      out += "<rect x=\"\(n(paper.minX))\" y=\"\(n(paper.minY))\" width=\"\(n(paper.width))\" height=\"\(n(paper.height))\"\(paint("fill", background))/>\n"
+    if let background = scene.paper.background ?? background {
+      out += "<rect x=\"\(n(area.minX))\" y=\"\(n(area.minY))\" width=\"\(n(area.width))\" height=\"\(n(area.height))\"\(paint("fill", background))/>\n"
     }
     out += "<g clip-path=\"url(#paper)\">\n"
     var clips = 0

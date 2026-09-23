@@ -2,7 +2,7 @@
 
 Bristle is a small, native macOS drawing app. It has the immediacy of a paint program — pick a pencil and draw — but everything you draw stays an editable object: shapes, lines and arrows, freehand strokes, text, and images. Nothing is flattened into pixels behind your back, so you can open a screenshot, mark it up, save an ordinary PNG, and reopen it later with every annotation still editable. Bristle requires macOS 13 or newer, works entirely offline, and has no third-party dependencies.
 
-![Bristle drawing shapes, an arrow, ink, and text, with a stroke selected and its format bar above it](Assets/Bristle-Screenshot.png)
+![Bristle drawing shapes, an arrow, ink, and text on its dotted canvas, with a shape selected and its style bar at the bottom](Assets/Bristle-Screenshot.png)
 
 ## Install
 
@@ -18,14 +18,16 @@ The Homebrew cask verifies the app bundle and removes its quarantine attribute s
 
 ## How it works
 
-- **The canvas** is a sheet of a set size, white or transparent, like a paint program's. It sets what is exported and printed. Objects can reach past its edges and are kept, shown faded, and left out of exports. Canvas ▸ Canvas Size, Crop to Selection, Fit Canvas to Drawing, and the canvas rotate and flip commands move objects, never pixels.
+- **The canvas** is endless, as Freeform's and Excalidraw's are, with an optional dot grid, and follows the light or dark appearance. On a dark canvas, colours are shown with their lightness turned around, as Excalidraw does, so black ink reads as white; the file keeps the colours you chose.
+- **A frame** marks the part of the canvas that is exported and printed, labelled with its size. Add one with the frame button at the bottom right or Canvas ▸ Add Frame; pick it by its label to move it, drag its handles to resize it, and press Delete to remove it. Canvas ▸ Frame Size, Frame Selection (⌘K), and Fit Frame to Drawing set it exactly. Without a frame, exports cover the whole drawing.
 - **The toolbar** holds every tool, one click each, in two capsules: Select, Draw, Eraser, and Fill; then Rectangle, Ellipse, Polygon, Line, Arrow, Text, and Image. Every tool also has a key: V Select, P Pencil, B Brush, M Highlighter, E Eraser, F Fill, R Rectangle, O Ellipse, G Polygon, L Line, A Arrow, T Text, I Eyedropper. Hold Space to pan.
-- **The Palette** is a sidebar beside the canvas, shown and hidden with the brush button (⇧⌘C), like Plainst's symbols sidebar. It shows everything at a glance, as Excalidraw does: the brush, stroke and fill colours (with any other colour from the system colour panel), width, line style, corners, curves, arrowheads, font, size, alignment, opacity, and, for the selection, its layer and actions. With nothing selected, it shows the canvas's size and background.
-- **The zoom control** at the bottom left and **the canvas control** at the bottom right hold the zoom level, the grid, and the canvas's size and background.
-- **Opening an image** makes a canvas the image's size with the image locked in place underneath, ready to mark up. Saving an unedited image writes back the same bytes.
+- **The style bar** at the bottom centre changes with what you're doing, as Freeform's does: the brush, its width, and its colour while drawing; how the eraser erases; and for a selection, its stroke and fill colours, width, line style, arrowheads, font, size, and alignment, with a menu to arrange it. Colours and menus open above the bar, inside the window. The bar hides when there's nothing to style.
+- **The zoom control** at the bottom left holds the zoom level and a menu of levels, and **the canvas control** at the bottom right holds the grid, the frame, the background, and snapping.
+- **The Palette** is an optional sidebar with every style at once, as Excalidraw shows them, shown and hidden with the brush button (⇧⌘C), like Plainst's symbols sidebar.
+- **Opening an image** frames it by its own edges, with the image locked in place underneath, ready to mark up. Saving an unedited image writes back the same bytes.
 - **PNGs keep the drawing.** A PNG saved by Bristle is an ordinary image everywhere else, and also carries the drawing in a private chunk, so it reopens in Bristle with every object editable. If the image is changed in another app, Bristle notices that the pixels no longer match, opens the image as it is now, and offers to restore the earlier objects.
 
-Bristle deliberately leaves out layers panels, filters and photo adjustments, custom brush engines, blend modes, animation, collaboration, and anything that needs an account or the network. The eraser and the fill tool work on objects, not pixels: the eraser removes objects, or with the stroke eraser, the parts of freehand strokes it passes over; the fill tool fills shapes and the canvas background.
+Bristle deliberately leaves out layers panels, filters and photo adjustments, custom brush engines, blend modes, animation, collaboration, and anything that needs an account or the network. The eraser and the fill tool work on objects, not pixels: the eraser removes objects, or with the stroke eraser, the parts of freehand strokes it passes over; the fill tool fills shapes, or the whole canvas when you click empty space.
 
 ## Features
 
@@ -49,7 +51,7 @@ A `.bristle` file is JSON, written with one object per line so it reads and diff
 {
   "type": "bristle",
   "version": 1,
-  "paper": {"width":1600,"height":1000,"background":"#FFFFFF"},
+  "canvas": {"background":null,"frame":[0,0,1600,1000]},
   "elements": [
     {"id":"4k2j9x","type":"rectangle","x":120,"y":80,"width":300,"height":180,"fill":"#DCEBFF","cornerRadius":16},
     {"id":"9sd0q1","type":"arrow","x":420,"y":170,"width":180,"height":40,"points":[[0,0],[180,40]],"startBinding":{"element":"4k2j9x","anchor":[0.5,0.5]}}
@@ -58,7 +60,7 @@ A `.bristle` file is JSON, written with one object per line so it reads and diff
 }
 ```
 
-- `paper` gives the canvas size in points, its `background` colour or `null` for transparent, and optionally its `resolution` in pixels per inch.
+- `canvas` gives its `background` colour, or `null` for none (the canvas follows the appearance and exports are transparent); the `frame`, `[x, y, width, height]` in points, when the drawing has one; and optionally a `resolution` in pixels per inch for exported images.
 - `elements` lists objects from back to front. Each has an `id`, a `type` (`rectangle`, `ellipse`, `polygon`, `line`, `arrow`, `freehand`, `text`, or `image`), and a frame (`x`, `y`, `width`, `height`) that `rotation` (radians, clockwise) turns about its centre. Values left at their defaults are omitted: `stroke` (a colour, or `null` for none, default `#1D1D1F`), `strokeWidth` (3), `dash` (`solid`, `dashed`, or `dotted`), `fill`, `opacity` (1), `cornerRadius`, `locked`, and `groups`, the ids of the groups the object belongs to, innermost first.
 - Polygons, lines, arrows, and freehand strokes have `points` relative to the frame's corner; strokes add `brush` (`pencil`, `pen`, or `highlighter`) and optional `pressures`, and lines add `curved`, `startArrowhead` and `endArrowhead` (`none`, `arrow`, `triangle`, `circle`, or `bar`), and `startBinding` and `endBinding`, which attach an end to another object at an `anchor` given in that object's unit coordinates.
 - Text has `text`, `font` (a PostScript name, or omitted for the system font), `fontSize`, `textAlign`, and `fixedWidth` when it wraps at its width.
@@ -80,13 +82,13 @@ The build is optimized and ad-hoc signed for the current Mac. Open `Package.swif
 
 ## Using the canvas in another app
 
-The canvas is the `BristleCanvas` library in this package, separate from the Bristle app, and the drawing model, file format, and rendering are in `BristleCore`. `CanvasView` provides every tool, selection, text editing, the clipboard, drag and drop, zoom, and VoiceOver support. The app adds documents, the toolbar, the drawing and format bars, the Palette, and Settings around it.
+The canvas is the `BristleCanvas` library in this package, separate from the Bristle app, and the drawing model, file format, and rendering are in `BristleCore`. `CanvasView` provides every tool, selection, text editing, the clipboard, drag and drop, zoom, and VoiceOver support. The app adds documents, the toolbar, the bars at the bottom of the window, the Palette, and Settings around it.
 
 ```swift
 import BristleCanvas
 import BristleCore
 
-let drawing = Drawing(scene: Scene(paper: Paper(width: 1200, height: 800)))
+let drawing = Drawing(scene: Scene())
 drawing.undoManager = undoManager
 let canvas = CanvasView(drawing: drawing)
 canvas.tool = .pen

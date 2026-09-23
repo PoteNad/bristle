@@ -15,7 +15,7 @@ fi
 
 APP="build/Bristle.app/Contents/MacOS/Bristle"
 # The checks use the default settings, whatever yours are.
-IGNORE_STATE="-ApplePersistenceIgnoreState YES -returnsToSelect NO -snapsToGrid NO -showsGrid NO -paperSize standard -transparentBackground NO"
+IGNORE_STATE="-ApplePersistenceIgnoreState YES -returnsToSelect NO -snapsToGrid NO -showsGrid NO"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 

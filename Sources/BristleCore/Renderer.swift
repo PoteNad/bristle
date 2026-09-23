@@ -158,14 +158,14 @@ public enum Renderer {
     context.restoreGState()
   }
 
-  /// Draws the paper and the elements that touch `rect`.
+  /// Draws the background, if any, and the elements that touch `rect`.
   public static func draw(
-    _ scene: Scene, in context: CGContext, rect: CGRect? = nil, images: ImageStore, paper: Bool = true
+    _ scene: Scene, in context: CGContext, rect: CGRect? = nil, images: ImageStore, background: Color? = nil
   ) {
-    let area = rect ?? scene.paperRect
-    if paper, let background = scene.paper.background {
+    let area = rect ?? scene.exportArea ?? .zero
+    if let background = scene.paper.background ?? background {
       context.setFillColor(background.cgColor)
-      context.fill(scene.paperRect.intersection(area))
+      context.fill(area)
     }
     for element in scene.elements where element.bounds.intersects(area) {
       draw(element, in: context, scene: scene, images: images)
@@ -185,14 +185,15 @@ public enum Renderer {
     return context
   }
 
-  /// The scene's paper as an image, `scale` pixels per canvas unit, cut off at the paper's edges.
-  public static func image(_ scene: Scene, scale: CGFloat = 1, area: CGRect? = nil, images: ImageStore = ImageStore())
-    -> CGImage?
-  {
-    let area = area ?? scene.paperRect
+  /// The drawing as an image, `scale` pixels per canvas unit: its frame, or all of it. A
+  /// `background` fills the image when the drawing has no background of its own.
+  public static func image(
+    _ scene: Scene, scale: CGFloat = 1, area: CGRect? = nil, images: ImageStore = ImageStore(), background: Color? = nil
+  ) -> CGImage? {
+    let area = area ?? scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
     guard let context = bitmap(size: area.size, scale: scale) else { return nil }
     context.translateBy(x: -area.minX, y: -area.minY)
-    draw(scene, in: context, rect: area, images: images, paper: true)
+    draw(scene, in: context, rect: area, images: images, background: background)
     return context.makeImage()
   }
 
@@ -207,11 +208,12 @@ public enum Renderer {
     return CGImageDestinationFinalize(destination) ? data as Data : nil
   }
 
-  /// The scene as a vector PDF, one page the size of the paper.
-  public static func pdf(_ scene: Scene, area: CGRect? = nil, images: ImageStore = ImageStore(), title: String? = nil)
-    -> Data
-  {
-    let area = area ?? scene.paperRect
+  /// The drawing as a vector PDF, one page the size of its frame, or of all of it.
+  public static func pdf(
+    _ scene: Scene, area: CGRect? = nil, images: ImageStore = ImageStore(), title: String? = nil,
+    background: Color? = nil
+  ) -> Data {
+    let area = area ?? scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
     let data = NSMutableData()
     var box = CGRect(origin: .zero, size: area.size)
     var info: [CFString: Any] = [kCGPDFContextCreator: "Bristle"]
@@ -224,7 +226,7 @@ public enum Renderer {
     context.scaleBy(x: 1, y: -1)
     context.translateBy(x: -area.minX, y: -area.minY)
     context.clip(to: area)
-    draw(scene, in: context, rect: area, images: images, paper: true)
+    draw(scene, in: context, rect: area, images: images, background: background)
     context.endPDFPage()
     context.closePDF()
     return data as Data
