@@ -113,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     edit.addItem(.separator())
     add(edit, "Select All", #selector(NSText.selectAll(_:)), "a")
     add(edit, "Deselect All", #selector(CanvasView.deselectAll(_:)), "a", modifiers: [.command, .shift])
+    add(edit, "Invert Selection", #selector(CanvasView.invertSelection(_:)))
 
     let format = menu("Format")
     add(format, "Show Palette", #selector(Editor.togglePalette(_:)), "c", modifiers: [.command, .shift])
@@ -121,6 +122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     bold.tag = Int(NSFontTraitMask.boldFontMask.rawValue)
     let italic = add(format, "Italic", #selector(NSFontManager.addFontTrait(_:)), "i", target: NSFontManager.shared)
     italic.tag = Int(NSFontTraitMask.italicFontMask.rawValue)
+    format.addItem(.separator())
+    add(format, "Remove Background", #selector(CanvasView.removeBackground(_:)))
     format.addItem(.separator())
     add(format, "Copy Style", #selector(CanvasView.copyStyle(_:)), "c", modifiers: [.command, .option])
     add(format, "Paste Style", #selector(CanvasView.pasteStyle(_:)), "v", modifiers: [.command, .option])

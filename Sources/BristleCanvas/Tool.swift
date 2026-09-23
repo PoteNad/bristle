@@ -4,7 +4,7 @@ import BristleCore
 /// What dragging on the canvas does.
 public enum Tool: String, CaseIterable, Sendable {
   case select
-  case pencil, pen, highlighter, pixel
+  case pencil, pen, highlighter, pixel, calligraphy, airbrush
   case eraser, strokeEraser
   case line, arrow
   case rectangle, ellipse, polygon
@@ -19,8 +19,10 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pen: "Brush"
     case .highlighter: "Highlighter"
     case .pixel: "Pixel"
-    case .eraser: "Eraser"
-    case .strokeEraser: "Stroke Eraser"
+    case .calligraphy: "Calligraphy"
+    case .airbrush: "Airbrush"
+    case .eraser: "Object Eraser"
+    case .strokeEraser: "Pixel Eraser"
     case .line: "Line"
     case .arrow: "Arrow"
     case .rectangle: "Rectangle"
@@ -40,8 +42,10 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pen: "b"
     case .highlighter: "m"
     case .pixel: "x"
-    case .eraser: "e"
-    case .strokeEraser: ""
+    case .calligraphy: "c"
+    case .airbrush: "s"
+    case .eraser: ""
+    case .strokeEraser: "e"
     case .line: "l"
     case .arrow: "a"
     case .rectangle: "r"
@@ -59,7 +63,9 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pencil: "pencil"
     case .pen: "paintbrush.pointed"
     case .highlighter: "highlighter"
-    case .pixel: "checkerboard.rectangle"
+    case .pixel: "squareshape.split.3x3"
+    case .calligraphy: "signature"
+    case .airbrush: "aqi.medium"
     case .eraser: "eraser"
     case .strokeEraser: "eraser.line.dashed"
     case .line: "line.diagonal"
@@ -80,6 +86,8 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pen: .pen
     case .highlighter: .highlighter
     case .pixel: .pixel
+    case .calligraphy: .calligraphy
+    case .airbrush: .airbrush
     default: nil
     }
   }
@@ -91,6 +99,8 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pen: Style(strokeWidth: 8)
     case .highlighter: Style(stroke: Color(hex: "#FFD60A"), strokeWidth: 24, opacity: 0.45)
     case .pixel: Style(strokeWidth: 1)
+    case .calligraphy: Style(strokeWidth: 10)
+    case .airbrush: Style(strokeWidth: 28)
     case .line: Style(strokeWidth: 3)
     case .arrow: Style(strokeWidth: 3, endArrowhead: .arrow)
     case .rectangle, .ellipse, .polygon: Style(strokeWidth: 3)

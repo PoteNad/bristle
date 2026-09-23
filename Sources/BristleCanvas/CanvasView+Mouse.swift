@@ -3,12 +3,15 @@ import BristleCore
 
 /// What the pointer is doing between pressing and releasing.
 enum Interaction {
+  var isNone: Bool { if case .none = self { true } else { false } }
+
   case none
   case panning(last: CGPoint)
   case freehand(points: [CGPoint], pressures: [CGFloat], tablet: Bool, dirty: CGRect)
   case shape(start: CGPoint, draft: Element)
   case polygon(points: [CGPoint])
   case marquee(start: CGPoint, current: CGPoint, base: Set<String>)
+  case lasso(points: [CGPoint], base: Set<String>)
   case moving(start: CGPoint, originals: [Element], moved: Bool, copies: Bool)
   case resizing(handle: Int, start: CGPoint, box: SelectionBox, originals: [Element])
   case rotating(start: CGPoint, box: SelectionBox, originals: [Element])
@@ -54,7 +57,7 @@ extension CanvasView {
     let tool = tabletEraser ? Tool.eraser : self.tool
     switch tool {
     case .select: selectDown(p, event)
-    case .pencil, .pen, .highlighter, .pixel:
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush:
       let tablet = event.subtype == .tabletPoint
       interaction = .freehand(
         points: [p], pressures: [tablet ? CGFloat(event.pressure) : 1], tablet: tablet,
@@ -75,6 +78,13 @@ extension CanvasView {
       } else {
         draft.frame = CGRect(origin: start, size: .zero)
       }
+      interaction = .shape(start: start, draft: draft)
+    case .polygon where shapePreset != nil:
+      var draft = Element(kind: .polygon)
+      style.apply(to: &draft)
+      let start = snapped(p, event: event)
+      draft.curved = shapePreset?.curved ?? false
+      draft.frame = CGRect(origin: start, size: .zero)
       interaction = .shape(start: start, draft: draft)
     case .polygon: polygonDown(p, event)
     case .text:
@@ -161,7 +171,8 @@ extension CanvasView {
         select([])
         enteredGroup = nil
       }
-      interaction = .marquee(start: p, current: p, base: shift ? drawing.selection : [])
+      let base = shift ? drawing.selection : []
+      interaction = lassoSelects ? .lasso(points: [p], base: base) : .marquee(start: p, current: p, base: base)
     }
   }
 
@@ -198,6 +209,7 @@ extension CanvasView {
 
   public override func mouseDragged(with event: NSEvent) {
     let p = point(event)
+    hoverPoint = p
     switch interaction {
     case .none: break
     case .panning(let last):
@@ -236,6 +248,18 @@ extension CanvasView {
       touched = scene.expandToGroups(touched, within: enteredGroup).filter { scene[$0]?.locked == false }
       drawing.selection = base.union(touched)
       setNeedsDisplay(rect.insetBy(dx: -2, dy: -2))
+    case .lasso(var points, let base):
+      guard let last = points.last, last.distance(to: p) >= 2 / magnification else { return }
+      points.append(p)
+      interaction = .lasso(points: points, base: base)
+      // Objects whose middle is inside the loop are picked, as it's drawn.
+      let loop = CGMutablePath()
+      loop.addLines(between: points)
+      loop.closeSubpath()
+      var touched = Set(pickableElements.filter { loop.contains($0.bounds.center) }.map(\.id))
+      touched = scene.expandToGroups(touched, within: enteredGroup).filter { scene[$0]?.locked == false }
+      drawing.selection = base.union(touched)
+      setNeedsDisplay(CGRect(boundingPoints: points).insetBy(dx: -3 / magnification, dy: -3 / magnification))
     case .moving(let start, var originals, let moved, let copies):
       if !moved {
         guard start.distance(to: p) > 3 / magnification else { return }
@@ -334,6 +358,11 @@ extension CanvasView {
       draft.frame = CGRect(x: start.x - abs(dx), y: start.y - abs(dy), width: abs(dx) * 2, height: abs(dy) * 2)
     } else {
       draft.frame = CGRect(boundingPoints: [start, CGPoint(x: start.x + dx, y: start.y + dy)])
+    }
+    // A ready-made shape fills the box as an ordinary polygon.
+    if draft.kind == .polygon, let preset = shapePreset {
+      let box = draft.frame
+      if box.width > 0, box.height > 0 { draft.setWorldPoints(preset.points(in: box)) }
     }
   }
 
@@ -556,6 +585,8 @@ extension CanvasView {
       interaction = .polygon(points: points)
     case .marquee(let start, let current, _):
       setNeedsDisplay(CGRect(boundingPoints: [start, current]).insetBy(dx: -2, dy: -2))
+    case .lasso(let points, _):
+      setNeedsDisplay(CGRect(boundingPoints: points).insetBy(dx: -3 / magnification, dy: -3 / magnification))
     case .moving(_, let originals, let moved, _):
       if moved {
         drawing.endGesture(originals.count == 1 ? "Move \(originals[0].kindName)" : "Move")
@@ -666,6 +697,7 @@ extension CanvasView {
 
   public override func mouseMoved(with event: NSEvent) {
     let p = point(event)
+    hoverPoint = p
     if case .polygon(var points) = interaction {
       let previous = CGRect(boundingPoints: Array(points.suffix(2)))
       points[points.count - 1] = constrained(p, from: points[points.count - 2], event: event)
@@ -675,6 +707,8 @@ extension CanvasView {
     }
     updateCursor(at: p)
   }
+
+  public override func mouseExited(with event: NSEvent) { hoverPoint = nil }
 
   public override func otherMouseDown(with event: NSEvent) {
     interaction = .panning(last: event.locationInWindow)
@@ -747,6 +781,18 @@ extension CanvasView {
       context.setStrokeColor(accent.withAlphaComponent(0.8).cgColor)
       context.setLineWidth(1 / scale)
       context.stroke(rect)
+    case .lasso(let points, _):
+      guard points.count > 1 else { break }
+      context.addLines(between: points)
+      context.closePath()
+      context.setFillColor(accent.withAlphaComponent(0.1).cgColor)
+      context.fillPath()
+      context.addLines(between: points)
+      context.setStrokeColor(accent.withAlphaComponent(0.8).cgColor)
+      context.setLineWidth(1 / scale)
+      context.setLineDash(phase: 0, lengths: [4 / scale, 3 / scale])
+      context.strokePath()
+      context.setLineDash(phase: 0, lengths: [])
     case .textBox(let start, let current):
       let rect = CGRect(boundingPoints: [start, current])
       context.setStrokeColor(accent.cgColor)

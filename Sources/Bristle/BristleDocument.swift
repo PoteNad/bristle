@@ -39,7 +39,8 @@ final class BristleDocument: NSDocument {
 
   /// A new drawing that's still blank closes without asking to be saved.
   override var isDocumentEdited: Bool {
-    if fileURL == nil && drawing.scene.elements.isEmpty && original == nil { return false }
+    // A frame or a background colour counts as a change, just as drawing does.
+    if fileURL == nil && drawing.scene == Scene() && original == nil { return false }
     return super.isDocumentEdited
   }
 

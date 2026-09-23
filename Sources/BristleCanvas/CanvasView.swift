@@ -68,6 +68,7 @@ public final class CanvasView: NSView {
         drawing.selection = []
       }
       window?.invalidateCursorRects(for: self)
+      if hoverPoint != nil { needsDisplay = true }
       delegate?.canvasViewToolDidChange(self)
     }
   }
@@ -75,7 +76,10 @@ public final class CanvasView: NSView {
   var selectionBeforeEyedropper: Set<String>?
 
   /// The style each tool gives new elements.
-  public var styles: [Tool: Style] = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0, $0.defaultStyle) })
+  public var styles: [Tool: Style] = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0, $0.defaultStyle) }) {
+    // The size ring follows a new width.
+    didSet { if showsSizeRing, hoverPoint != nil { needsDisplay = true } }
+  }
 
   public var style: Style {
     get { styles[tool] ?? tool.defaultStyle }
@@ -97,6 +101,23 @@ public final class CanvasView: NSView {
   /// The polygon whose corners are shown for dragging.
   var pointEditingID: String?
   var textEditor: TextEditor?
+  /// Where the pointer is over the canvas, for the ring showing the brush's size.
+  var hoverPoint: CGPoint? {
+    didSet {
+      guard hoverPoint != oldValue else { return }
+      invalidateSizeRing(oldValue)
+      invalidateSizeRing(hoverPoint)
+    }
+  }
+  /// What the window lays over the canvas, in window coordinates: bars, and the toolbar. The
+  /// pointer is an arrow there.
+  public var coveredRects: (() -> [NSRect])?
+  /// The ready-made shape the polygon tool draws with one drag, or `nil` to place corners one
+  /// click at a time.
+  public var shapePreset: ShapePreset? { didSet { delegate?.canvasViewToolDidChange(self) } }
+  /// Whether dragging across empty canvas with Select draws a free-form loop, as MS Paint's
+  /// Free-form selection does, instead of a box.
+  public var lassoSelects = false { didSet { delegate?.canvasViewToolDidChange(self) } }
   var spaceHeld = false
   var tabletEraser = false
   var pasteCount = 0
@@ -340,6 +361,7 @@ public final class CanvasView: NSView {
     drawInteraction(in: context, scale: scale)
     drawSelection(in: context, scale: scale)
     drawGuides(in: context, scale: scale)
+    drawSizeRing(in: context, scale: scale)
   }
 
   /// A color as it's shown on this canvas.
@@ -579,7 +601,8 @@ public final class CanvasView: NSView {
     trackingAreas.forEach(removeTrackingArea)
     addTrackingArea(
       NSTrackingArea(
-        rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .cursorUpdate, .inVisibleRect], owner: self))
+        rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect],
+        owner: self))
   }
 }
 

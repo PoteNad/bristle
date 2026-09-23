@@ -10,7 +10,7 @@ extension Element {
     case .polygon: "Polygon"
     case .line: "Line"
     case .arrow: "Arrow"
-    case .freehand: brush == .highlighter ? "Highlighter stroke" : brush == .pixel ? "Pixels" : "Drawing"
+    case .freehand: brush == .highlighter ? "Highlighter stroke" : brush == .pixel ? "Pixels" : brush == .airbrush ? "Spray" : "Drawing"
     case .text: "Text"
     case .image: "Image"
     }

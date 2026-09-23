@@ -1,5 +1,7 @@
 import AppKit
 import BristleCore
+import CoreImage
+import Vision
 
 extension CanvasView: NSMenuItemValidation {
   // MARK: Keys
@@ -107,15 +109,42 @@ extension CanvasView: NSMenuItemValidation {
 
   // MARK: Cursors
 
+  /// The tool's cursor everywhere the canvas shows, except under the bars laid over it and the
+  /// toolbar, where the arrow makes their buttons easy to aim at.
   public override func resetCursorRects() {
-    addCursorRect(visibleRect, cursor: toolCursor)
+    let visible = visibleRect
+    let covered = coveredRectsInCanvas().filter { $0.intersects(visible) }
+    guard !covered.isEmpty else { return addCursorRect(visible, cursor: toolCursor) }
+    // Cut what's visible into a grid along every covered rectangle's edges, keeping the cells
+    // that nothing covers.
+    let xs = Set([visible.minX, visible.maxX] + covered.flatMap { [$0.minX, $0.maxX] }).filter { $0 >= visible.minX && $0 <= visible.maxX }.sorted()
+    let ys = Set([visible.minY, visible.maxY] + covered.flatMap { [$0.minY, $0.maxY] }).filter { $0 >= visible.minY && $0 <= visible.maxY }.sorted()
+    for (x0, x1) in zip(xs, xs.dropFirst()) {
+      for (y0, y1) in zip(ys, ys.dropFirst()) {
+        let cell = CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+        let middle = CGPoint(x: cell.midX, y: cell.midY)
+        if !covered.contains(where: { $0.contains(middle) }) { addCursorRect(cell, cursor: toolCursor) }
+      }
+    }
+    for rect in covered { addCursorRect(rect.intersection(visible), cursor: .arrow) }
   }
+
+  /// What lies over the canvas, in its own coordinates.
+  func coveredRectsInCanvas() -> [CGRect] {
+    (coveredRects?() ?? []).map { convert($0, from: nil) }
+  }
+
+  func isCovered(_ p: CGPoint) -> Bool { coveredRectsInCanvas().contains { $0.contains(p) } }
 
   public override func cursorUpdate(with event: NSEvent) {
     updateCursor(at: point(event))
   }
 
   func updateCursor(at p: CGPoint) {
+    if interaction.isNone && isCovered(p) {
+      NSCursor.arrow.set()
+      return
+    }
     if spaceHeld {
       NSCursor.openHand.set()
       return
@@ -143,34 +172,72 @@ extension CanvasView: NSMenuItemValidation {
     switch tool {
     case .select: return .arrow
     case .text: return .iBeam
-    case .pencil, .pen, .highlighter, .pixel, .eraser, .strokeEraser:
-      return brushCursor(diameter: (style.strokeWidth) * magnification, square: tool == .highlighter || tool == .pixel)
+    // The size of a brush or the eraser shows as a ring drawn on the canvas, under the bars, so
+    // the cursor itself is small.
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush: return Self.dotCursor
+    case .eraser, .strokeEraser: return symbolCursor("eraser", hotSpot: CGPoint(x: 9, y: 9))
     case .eyedropper: return symbolCursor("eyedropper", hotSpot: CGPoint(x: 1, y: 15))
     case .fill: return symbolCursor("drop", hotSpot: CGPoint(x: 8, y: 15))
     default: return .crosshair
     }
   }
 
-  /// A circle the size of the brush, so you can see what a stroke will cover.
-  func brushCursor(diameter: CGFloat, square: Bool) -> NSCursor {
-    let d = min(160, max(5, diameter))
-    let size = NSSize(width: ceil(d) + 4, height: ceil(d) + 4)
+  /// A small dot with a light edge, which shows on any color.
+  static let dotCursor: NSCursor = {
+    let size = NSSize(width: 9, height: 9)
     let image = NSImage(size: size, flipped: false) { rect in
-      let circle = NSRect(x: (rect.width - d) / 2, y: (rect.height - d) / 2, width: d, height: d)
-      let path = square ? NSBezierPath(rect: circle) : NSBezierPath(ovalIn: circle)
+      let dot = NSBezierPath(ovalIn: rect.insetBy(dx: 2.5, dy: 2.5))
       NSColor.white.withAlphaComponent(0.9).setStroke()
-      path.lineWidth = 2.5
-      path.stroke()
-      NSColor.black.withAlphaComponent(0.85).setStroke()
-      path.lineWidth = 1
-      path.stroke()
-      if d < 10 {
-        NSColor.black.setFill()
-        NSRect(x: rect.midX - 0.5, y: rect.midY - 0.5, width: 1, height: 1).fill()
-      }
+      dot.lineWidth = 2
+      dot.stroke()
+      NSColor.black.setFill()
+      dot.fill()
       return true
     }
-    return NSCursor(image: image, hotSpot: NSPoint(x: size.width / 2, y: size.height / 2))
+    return NSCursor(image: image, hotSpot: NSPoint(x: 4.5, y: 4.5))
+  }()
+
+  /// Whether the pointer shows the size of what it paints or erases.
+  var showsSizeRing: Bool { tool.brush != nil || tool == .eraser || tool == .strokeEraser }
+
+  /// How wide the ring is: the brush's width, or the eraser's.
+  var sizeRingWidth: CGFloat {
+    [.eraser, .strokeEraser].contains(tool) ? (styles[.eraser]?.strokeWidth ?? 16) : style.strokeWidth
+  }
+
+  /// The shape the brush or eraser covers under the pointer: a circle, or a square for the
+  /// highlighter and the pixel brush, whose square sits on the pixel grid.
+  func sizeRing(at p: CGPoint) -> (rect: CGRect, square: Bool) {
+    let width = sizeRingWidth
+    if tool == .pixel {
+      let side = max(1, width.rounded())
+      let origin = CGPoint(x: (p.x / side).rounded(.down) * side, y: (p.y / side).rounded(.down) * side)
+      return (CGRect(origin: origin, size: CGSize(width: side, height: side)), true)
+    }
+    return (CGRect(x: p.x - width / 2, y: p.y - width / 2, width: width, height: width), tool == .highlighter)
+  }
+
+  func invalidateSizeRing(_ p: CGPoint?) {
+    guard let p else { return }
+    let margin = 3 / magnification
+    setNeedsDisplay(sizeRing(at: p).rect.insetBy(dx: -margin, dy: -margin))
+  }
+
+  func drawSizeRing(in context: CGContext, scale: CGFloat) {
+    guard showsSizeRing, let p = hoverPoint, !spaceHeld else { return }
+    let (rect, square) = sizeRing(at: p)
+    guard rect.width * scale >= 4 else { return }
+    let path = square ? CGPath(rect: rect, transform: nil) : CGPath(ellipseIn: rect, transform: nil)
+    context.saveGState()
+    context.addPath(path)
+    context.setStrokeColor(CGColor(gray: 1, alpha: 0.9))
+    context.setLineWidth(2.5 / scale)
+    context.strokePath()
+    context.addPath(path)
+    context.setStrokeColor(CGColor(gray: 0, alpha: 0.75))
+    context.setLineWidth(1 / scale)
+    context.strokePath()
+    context.restoreGState()
   }
 
   func symbolCursor(_ name: String, hotSpot: CGPoint) -> NSCursor {
@@ -300,6 +367,14 @@ extension CanvasView: NSMenuItemValidation {
 
   @objc public func deselectAll(_ sender: Any?) { select([]) }
 
+  /// Edit ▸ Invert Selection, as MS Paint has: everything not selected, and nothing else.
+  @objc public func invertSelection(_ sender: Any?) {
+    if tool != .select { tool = .select }
+    enteredGroup = nil
+    let selected = drawing.selection
+    select(scene.expandToGroups(Set(pickableElements.map(\.id)).subtracting(selected)).subtracting(selected))
+  }
+
   @objc public func duplicate(_ sender: Any?) {
     let ids = drawing.selection
     guard !ids.isEmpty else { return }
@@ -358,6 +433,50 @@ extension CanvasView: NSMenuItemValidation {
   }
 
   /// Starts cropping the selected image, as double-clicking it does.
+  /// Format ▸ Remove Background, as MS Paint offers: the subject of the selected photo is kept
+  /// and the rest made transparent, worked out on this Mac by Vision. The original image stays
+  /// in the drawing's history, so it can be undone.
+  @objc public func removeBackground(_ sender: Any?) {
+    guard #available(macOS 14.0, *) else { return NSSound.beep() }
+    let targets = drawing.selectedElements.filter { $0.kind == .image && !$0.locked }
+    guard !targets.isEmpty else { return }
+    let files = targets.compactMap { e in scene.files[e.file].map { (e.id, $0.data) } }
+    Task.detached(priority: .userInitiated) {
+      var results: [(String, Data)] = []
+      for (id, data) in files {
+        if let cut = Self.subject(of: data) { results.append((id, cut)) }
+      }
+      let done = results
+      await MainActor.run { [weak self] in
+        guard let self else { return }
+        guard !done.isEmpty else { return NSSound.beep() }
+        self.drawing.edit("Remove Background") { scene in
+          for (id, png) in done {
+            guard var e = scene[id] else { continue }
+            e.file = scene.addFile(ImageFile(type: "public.png", data: png))
+            scene[id] = e
+          }
+          scene.removeUnusedFiles()
+        }
+      }
+    }
+  }
+
+  /// The image with everything but its subject made transparent, as PNG data.
+  @available(macOS 14.0, *)
+  nonisolated static func subject(of data: Data) -> Data? {
+    guard let image = ImageStore.decode(data) else { return nil }
+    let request = VNGenerateForegroundInstanceMaskRequest()
+    let handler = VNImageRequestHandler(cgImage: image)
+    guard (try? handler.perform([request])) != nil, let result = request.results?.first,
+      let buffer = try? result.generateMaskedImage(ofInstances: result.allInstances, from: handler, croppedToInstancesExtent: false)
+    else { return nil }
+    let context = CIContext()
+    guard let cut = context.createCGImage(CIImage(cvPixelBuffer: buffer), from: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    else { return nil }
+    return Renderer.png(cut)
+  }
+
   @objc public func cropSelectedImage(_ sender: Any?) {
     guard let image = drawing.selectedElements.first(where: { $0.kind == .image && !$0.locked }) else { return }
     if tool != .select { tool = .select }
@@ -489,6 +608,10 @@ extension CanvasView: NSMenuItemValidation {
   public func validateMenuItem(_ item: NSMenuItem) -> Bool {
     let unlocked = drawing.selection.contains { scene[$0]?.locked == false }
     switch item.action {
+    case #selector(removeBackground(_:)):
+      guard #available(macOS 14.0, *) else { return false }
+      return drawing.selectedElements.contains { $0.kind == .image && !$0.locked }
+    case #selector(invertSelection(_:)): return !scene.elements.isEmpty
     case #selector(undo(_:)):
       item.title = undoManager?.undoMenuItemTitle ?? "Undo"
       return undoManager?.canUndo ?? false

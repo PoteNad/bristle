@@ -23,6 +23,9 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   private var shownOnce = false
   /// The drawing tool Draw uses: the brush chosen last.
   private var lastBrush: Tool = .pen
+  /// The eraser the Eraser button chooses: the one used last, rubbing out pixels at first, as
+  /// MS Paint's does.
+  private var lastEraser: Tool = .strokeEraser
 
   init(document: BristleDocument) {
     note = document
@@ -64,6 +67,19 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     root.zoom = zoomBar.bar
     root.options = canvasBar.bar
     root.style = styleBar.bar
+    // Over the bars and the toolbar, the pointer is the arrow, not the tool's.
+    canvas.coveredRects = { [weak self] in
+      guard let self, let window = self.window else { return [] }
+      var rects = [self.zoomBar.bar, self.canvasBar.bar, self.styleBar.bar].filter { !$0.isHidden && $0.window != nil }
+        .map { $0.convert($0.bounds, to: nil) }
+      let top = window.contentLayoutRect.maxY
+      rects.append(NSRect(x: 0, y: top, width: window.frame.width, height: max(0, window.frame.height - top)))
+      return rects
+    }
+    root.didLayout = { [weak self] in
+      guard let self else { return }
+      self.window?.invalidateCursorRects(for: self.canvas)
+    }
     let controller = NSViewController()
     controller.view = root
     // The Palette shares the window beside the canvas, like Plainst's symbols sidebar.
@@ -73,7 +89,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     paletteItem = NSSplitViewItem(inspectorWithViewController: palette)
     paletteItem.canCollapse = true
     paletteItem.minimumThickness = 260
-    paletteItem.maximumThickness = 340
+    paletteItem.maximumThickness = 380
     paletteItem.isCollapsed = isAutomatedCheck || !UserDefaults.standard.bool(forKey: PreferenceKey.paletteVisible)
     split.addSplitViewItem(paletteItem)
     if !isAutomatedCheck { split.splitView.autosaveName = "BristleEditorSplit" }
@@ -163,6 +179,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   func canvasViewToolDidChange(_ canvas: CanvasView) {
     if Controls.brushes.contains(canvas.tool) { lastBrush = canvas.tool }
+    if canvas.tool == .eraser || canvas.tool == .strokeEraser { lastEraser = canvas.tool }
     updateBars()
   }
 
@@ -238,7 +255,15 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   }
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [.flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
+    // The tools centre over the canvas, and Share and the Palette's button stay over the
+    // Palette, so opening it doesn't push the tools off centre.
+    if #available(macOS 14.0, *) {
+      return [
+        .flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, .inspectorTrackingSeparator,
+        .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem,
+      ]
+    }
+    return [.flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -263,24 +288,28 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   /// A tool's symbol; while it's the tool in use, a filled circle with the symbol cut out of it,
   /// as Freeform marks its drawing tool.
+  /// Every tool's picture is the same size, on or off, so the toolbar never shifts as tools
+  /// are chosen, and its symbol stays the same size in the circle.
   private func slotImage(_ slot: Slot, on: Bool) -> NSImage? {
     let details = slotDetails(slot)
-    let plain = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)
-    guard on, let symbol = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
-      .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
-    else { return plain }
-    let side: CGFloat = 24
+    guard let symbol = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
+      .withSymbolConfiguration(.init(pointSize: 13, weight: on ? .semibold : .regular))
+    else { return nil }
+    let side: CGFloat = 26
     let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-      NSColor.black.setFill()
-      NSBezierPath(ovalIn: rect).fill()
       let size = symbol.size
-      symbol.draw(
-        in: NSRect(x: (side - size.width) / 2, y: (side - size.height) / 2, width: size.width, height: size.height),
-        from: .zero, operation: .destinationOut, fraction: 1)
+      let place = NSRect(x: ((side - size.width) / 2).rounded(), y: ((side - size.height) / 2).rounded(), width: size.width, height: size.height)
+      if on {
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        symbol.draw(in: place, from: .zero, operation: .destinationOut, fraction: 1)
+      } else {
+        symbol.draw(in: place)
+      }
       return true
     }
     image.isTemplate = true
-    image.accessibilityDescription = details.label + ", selected"
+    image.accessibilityDescription = on ? details.label + ", selected" : details.label
     return image
   }
 
@@ -337,7 +366,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   var currentSlot: Slot? {
     switch canvas.tool {
     case .select: .select
-    case .pencil, .pen, .highlighter, .pixel: .draw
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush: .draw
     case .eraser, .strokeEraser: .eraser
     case .fill: .fill
     case .rectangle: .rectangle
@@ -379,7 +408,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     switch slot {
     case .select: canvas.tool = .select
     case .draw: canvas.tool = lastBrush
-    case .eraser: if canvas.tool != .strokeEraser { canvas.tool = .eraser }
+    case .eraser: canvas.tool = lastEraser
     case .fill: canvas.tool = .fill
     case .rectangle: canvas.tool = .rectangle
     case .ellipse: canvas.tool = .ellipse
@@ -425,6 +454,21 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   }
 
   var paletteVisible: Bool { !paletteItem.isCollapsed }
+
+  /// The Palette's width until it's dragged wider or narrower.
+  static let paletteWidth: CGFloat = 280
+
+  func resetPaletteWidth() {
+    guard let split = window?.contentViewController as? NSSplitViewController, !paletteItem.isCollapsed else { return }
+    let view = split.splitView
+    let position = view.bounds.width - view.dividerThickness - Self.paletteWidth
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = isAutomatedCheck ? 0 : 0.2
+      context.allowsImplicitAnimation = true
+      view.setPosition(position, ofDividerAt: 0)
+      view.layoutSubtreeIfNeeded()
+    }
+  }
 
   /// The brush button and Format ▸ Show Palette slide the Palette in and out, as Plainst's
   /// symbols sidebar does, without resizing the window.
@@ -585,6 +629,7 @@ final class EditorView: NSView {
   var zoom: NSView? { didSet { replace(oldValue, zoom) } }
   var options: NSView? { didSet { replace(oldValue, options) } }
   var style: NSView? { didSet { replace(oldValue, style) } }
+  var didLayout: (() -> Void)?
 
   private func replace(_ old: NSView?, _ new: NSView?, below: Bool = false) {
     old?.removeFromSuperview()
@@ -616,6 +661,7 @@ final class EditorView: NSView {
       if frame.minX < left.maxX + 8 || frame.maxX > right.minX - 8 { frame.origin.y = left.maxY + 8 }
       style.frame = frame
     }
+    didLayout?()
   }
 }
 
@@ -653,8 +699,60 @@ final class AnchorPicker: NSView {
 final class EditorSplitViewController: NSSplitViewController {
   weak var editor: Editor?
 
+  override init(nibName nibNameOrNil: NSNib.Name?, bundle nibBundleOrNil: Bundle?) {
+    super.init(nibName: nibNameOrNil, bundle: nibBundleOrNil)
+    let splitView = DividerSplitView()
+    splitView.isVertical = true
+    splitView.dividerStyle = .thin
+    // Double-clicking the Palette's edge puts it back to its usual width, as Plainst's
+    // preview does.
+    splitView.onDoubleClick = { [weak self] _ in
+      self?.editor?.resetPaletteWidth()
+      return self?.editor != nil
+    }
+    self.splitView = splitView
+  }
+
+  required init?(coder: NSCoder) { fatalError() }
+
   @available(macOS 14.0, *)
   override func toggleInspector(_ sender: Any?) {
     if let editor { editor.togglePalette(sender) } else { super.toggleInspector(sender) }
+  }
+}
+
+/// A split view that reports double-clicks on its dividers, and stops its dividers at the
+/// toolbar rather than drawing them across the title bar, as Plainst's does.
+final class DividerSplitView: NSSplitView {
+  /// Returns true when the double-click on the divider at an index was handled.
+  var onDoubleClick: ((Int) -> Bool)?
+
+  override func drawDivider(in rect: NSRect) {
+    let top = bounds.maxY - safeAreaInsets.top
+    guard rect.maxY > top else { return super.drawDivider(in: rect) }
+    let visible = NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: max(0, top - rect.minY))
+    guard visible.height > 0 else { return }
+    super.drawDivider(in: visible)
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    if event.clickCount == 2, let index = divider(at: convert(event.locationInWindow, from: nil)),
+      onDoubleClick?(index) == true
+    {
+      return
+    }
+    super.mouseDown(with: event)
+  }
+
+  private func divider(at point: NSPoint) -> Int? {
+    let panes = arrangedSubviews
+    guard panes.count > 1 else { return nil }
+    for index in 0..<(panes.count - 1) {
+      let drawn = NSRect(
+        x: panes[index].frame.maxX, y: bounds.minY,
+        width: max(dividerThickness, panes[index + 1].frame.minX - panes[index].frame.maxX), height: bounds.height)
+      if drawn.insetBy(dx: -4, dy: 0).contains(point) { return index }
+    }
+    return nil
   }
 }

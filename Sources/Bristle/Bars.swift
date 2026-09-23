@@ -39,7 +39,7 @@ final class Bar: NSView {
     row.orientation = .horizontal
     row.spacing = 2
     row.alignment = .centerY
-    row.edgeInsets = NSEdgeInsets(top: 0, left: 5, bottom: 0, right: 5)
+    row.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
     views.forEach(row.addArrangedSubview)
     let capsule = glass(around: row, cornerRadius: Self.height / 2)
     capsule.translatesAutoresizingMaskIntoConstraints = false
@@ -77,25 +77,28 @@ final class Bar: NSView {
   }
 }
 
-/// A button for the bars, the size of Freeform's: a symbol or a short title on a rounded
-/// highlight that shows while the pointer is over it, while it's pressed, and while it's on.
+/// A button for the bars, the size of Freeform's: a symbol in a circle, or a short title in a
+/// rounded box. While on, it's filled with the symbol cut out of it, as the toolbar marks its
+/// tool; the pointer over it and pressing it shade it lightly.
 @MainActor
 final class BarButton: NSButton {
   /// Whether the choice the button stands for is the current one.
   var isOn = false {
     didSet {
       guard isOn != oldValue else { return }
-      contentTintColor = isOn ? .controlAccentColor : nil
+      contentTintColor = isOn ? .textBackgroundColor : nil
+      if imagePosition == .noImage { setText(text, menu: hasMenu) }
       setAccessibilityValue(isOn ? "on" : "off")
       needsDisplay = true
     }
   }
   private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
-  private var minimumWidth: CGFloat = 34
+  private var text = ""
+  private var hasMenu = false
 
   convenience init(symbol: String, title: String, target: AnyObject?, action: Selector?) {
     let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-      .withSymbolConfiguration(.init(pointSize: 15, weight: .medium)) ?? NSImage()
+      .withSymbolConfiguration(.init(pointSize: 14, weight: .medium)) ?? NSImage()
     self.init(image: image, title: title, target: target, action: action)
   }
 
@@ -113,7 +116,6 @@ final class BarButton: NSButton {
     imagePosition = .noImage
     setText(text, menu: menu)
     setup(tip: tip, target: target, action: action)
-    minimumWidth = 44
   }
 
   private func setup(tip: String, target: AnyObject?, action: Selector?) {
@@ -129,20 +131,23 @@ final class BarButton: NSButton {
   }
 
   func setText(_ text: String, menu: Bool = false) {
+    self.text = text
+    hasMenu = menu
+    let color: NSColor = isOn ? .textBackgroundColor : .labelColor
     let string = NSMutableAttributedString(
-      string: text,
-      attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium), .foregroundColor: NSColor.labelColor])
+      string: text, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium), .foregroundColor: color])
     if menu {
       string.append(NSAttributedString(
-        string: " ▾", attributes: [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: NSColor.secondaryLabelColor, .baselineOffset: 1]))
+        string: " ▾",
+        attributes: [.font: NSFont.systemFont(ofSize: 9), .foregroundColor: isOn ? color : .secondaryLabelColor, .baselineOffset: 1]))
     }
     attributedTitle = string
     invalidateIntrinsicContentSize()
   }
 
   override var intrinsicContentSize: NSSize {
-    let content = super.intrinsicContentSize
-    return NSSize(width: max(minimumWidth, content.width + (imagePosition == .noImage ? 20 : 12)), height: 32)
+    guard imagePosition == .noImage else { return NSSize(width: 32, height: 32) }
+    return NSSize(width: max(40, super.intrinsicContentSize.width + 18), height: 32)
   }
 
   override func updateTrackingAreas() {
@@ -155,13 +160,19 @@ final class BarButton: NSButton {
   override func mouseExited(with event: NSEvent) { hovering = false }
 
   override func draw(_ dirtyRect: NSRect) {
-    // A capsule concentric with the bar's, so it never looks cut off at the bar's ends.
-    let box = bounds.insetBy(dx: 1, dy: 1)
-    let pill = NSBezierPath(roundedRect: box, xRadius: box.height / 2, yRadius: box.height / 2)
-    let alpha: CGFloat = isHighlighted ? 0.16 : isOn ? 0.11 : hovering && isEnabled ? 0.07 : 0
-    if alpha > 0 {
-      NSColor.labelColor.withAlphaComponent(alpha).setFill()
-      pill.fill()
+    let shape: NSBezierPath
+    if imagePosition == .noImage {
+      shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 3), xRadius: 8, yRadius: 8)
+    } else {
+      let side = min(bounds.width, bounds.height) - 2
+      shape = NSBezierPath(ovalIn: NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side))
+    }
+    if isOn {
+      NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.7 : 0.85).setFill()
+      shape.fill()
+    } else if isHighlighted || (hovering && isEnabled) {
+      NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.07).setFill()
+      shape.fill()
     }
     super.draw(dirtyRect)
   }
@@ -218,8 +229,22 @@ func popUpAbove(_ menu: NSMenu, from view: NSView) {
 /// Shows a popover above a bar button.
 @MainActor
 func popoverAbove(_ content: NSView, from view: NSView) -> NSPopover {
+  // The popover sizes itself to its view, so the content sits in a container with margins
+  // and a size of its own.
+  let container = NSView()
+  content.translatesAutoresizingMaskIntoConstraints = false
+  container.addSubview(content)
+  let margin: CGFloat = 14
+  NSLayoutConstraint.activate([
+    content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: margin),
+    content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -margin),
+    content.topAnchor.constraint(equalTo: container.topAnchor, constant: margin),
+    content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -margin),
+  ])
+  container.layoutSubtreeIfNeeded()
   let controller = NSViewController()
-  controller.view = content
+  controller.view = container
+  controller.preferredContentSize = container.fittingSize
   let popover = NSPopover()
   popover.contentViewController = controller
   popover.behavior = .transient
@@ -234,8 +259,7 @@ func popoverStack(_ rows: [(String, NSView)]) -> NSView {
   let stack = NSStackView()
   stack.orientation = .vertical
   stack.alignment = .leading
-  stack.spacing = 10
-  stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+  stack.spacing = 12
   for (title, control) in rows {
     if title.isEmpty {
       stack.addArrangedSubview(control)
@@ -423,22 +447,41 @@ final class StyleBar: NSObject {
       group([BarButton(symbol: "lock.open", title: "Unlock All (⌥⌘L)", target: canvas, action: #selector(CanvasView.unlockAll(_:)))])
     } else {
       // Brushes, or the eraser's two ways of erasing.
-      if !selecting && Controls.brushes.contains(tool) {
-        group(Controls.brushes.map { brush in
-          toggle(BarButton(symbol: brush.symbol, title: "\(brush.title) (\(brush.key.uppercased()))", target: nil, action: nil),
-            on: { [weak canvas] in canvas?.tool == brush }) { [weak canvas] in canvas?.tool = brush }
-        })
-      } else if selecting && kinds == [.freehand] {
-        group(zip(Controls.brushes, Element.Brush.allCases).map { tool, brush in
-          toggle(BarButton(symbol: tool.symbol, title: tool.title, target: nil, action: nil),
-            on: { [weak c] in c?.elements.first?.brush == brush }) { [weak c] in c?.setBrush(brush) }
-        })
+      // Brushes come from a menu, as Freeform's pens do, shown by the brush in use.
+      if (!selecting && Controls.brushes.contains(tool)) || (selecting && kinds == [.freehand]) {
+        let current = selecting ? c.brushTool : tool
+        let button = BarButton(symbol: current.symbol, title: "Brush: \(current.title)", target: nil, action: nil)
+        button.isOn = true
+        group([action(button) { [weak self] sender in
+          guard let self else { return }
+          popUpAbove(self.brushMenu(), from: sender)
+        }])
+      } else if !selecting && tool == .select {
+        // Box or free-form selection, as MS Paint offers.
+        group([
+          toggle(BarButton(symbol: "rectangle.dashed", title: "Box Selection", target: nil, action: nil),
+            on: { [weak canvas] in canvas?.lassoSelects == false }) { [weak canvas] in canvas?.lassoSelects = false },
+          toggle(BarButton(symbol: "lasso", title: "Free-Form Selection", target: nil, action: nil),
+            on: { [weak canvas] in canvas?.lassoSelects == true }) { [weak canvas] in canvas?.lassoSelects = true },
+        ])
+      } else if !selecting && tool == .polygon {
+        let preset = canvas.shapePreset
+        let button = BarButton(
+          image: preset.map { Self.shapeImage($0) } ?? NSImage(systemSymbolName: "pentagon", accessibilityDescription: nil)!,
+          title: "Shape: \(preset?.title ?? "Corners")", target: nil, action: nil)
+        button.isOn = true
+        group([action(button) { [weak self] sender in
+          guard let self else { return }
+          popUpAbove(self.shapeMenu(), from: sender)
+        }])
       } else if !selecting && (tool == .eraser || tool == .strokeEraser) {
         group([
-          toggle(BarButton(symbol: "eraser", title: "Erase Objects", target: nil, action: nil),
-            on: { [weak canvas] in canvas?.tool == .eraser }) { [weak canvas] in canvas?.tool = .eraser },
-          toggle(BarButton(symbol: "eraser.line.dashed", title: "Erase Parts", target: nil, action: nil),
+          // Named as Freeform names them: Pixel rubs out the ink it passes over, and Object
+          // removes whole objects.
+          toggle(BarButton(text: "Pixel", tip: "Pixel Eraser: rub out the ink under the pointer", target: nil, action: nil),
             on: { [weak canvas] in canvas?.tool == .strokeEraser }) { [weak canvas] in canvas?.tool = .strokeEraser },
+          toggle(BarButton(text: "Object", tip: "Object Eraser: remove whole objects", target: nil, action: nil),
+            on: { [weak canvas] in canvas?.tool == .eraser }) { [weak canvas] in canvas?.tool = .eraser },
         ])
       }
       // Colors.
@@ -538,6 +581,9 @@ final class StyleBar: NSObject {
         var tail: [NSView] = []
         if kinds == [.image] {
           tail.append(BarButton(symbol: "crop", title: "Crop Image", target: canvas, action: #selector(CanvasView.cropSelectedImage(_:))))
+          if #available(macOS 14.0, *) {
+            tail.append(BarButton(symbol: "wand.and.stars", title: "Remove Background", target: canvas, action: #selector(CanvasView.removeBackground(_:))))
+          }
         }
         tail.append(action(BarButton(symbol: "ellipsis.circle", title: "Arrange", target: nil, action: nil)) { [weak self] sender in
           guard let self else { return }
@@ -607,6 +653,63 @@ final class StyleBar: NSObject {
     }
     MenuRelay { choose($0.tag) }.attach(to: menu)
     return menu
+  }
+
+  /// Every brush, with the one in use checked. For a selection of strokes, it changes theirs.
+  func brushMenu() -> NSMenu {
+    let menu = NSMenu(title: "Brush")
+    guard let canvas else { return menu }
+    let c = controls
+    let chosen = c.selecting ? c.brushTool : canvas.tool
+    for brush in Controls.brushes {
+      let item = menu.addItem(withTitle: brush.title, action: nil, keyEquivalent: "")
+      item.image = NSImage(systemSymbolName: brush.symbol, accessibilityDescription: nil)
+      item.state = brush == chosen ? .on : .off
+      item.representedObject = brush.rawValue
+      if !brush.key.isEmpty { item.toolTip = "Press \(brush.key.uppercased()) on the canvas" }
+    }
+    MenuRelay { [weak self, weak canvas, weak c] item in
+      guard let canvas, let c, let brush = (item.representedObject as? String).flatMap(Tool.init(rawValue:)) else { return }
+      if c.selecting { brush.brush.map(c.setBrush) } else { canvas.tool = brush }
+      self?.update()
+    }.attach(to: menu)
+    return menu
+  }
+
+  /// MS Paint's shapes, drawn with one drag, and placing corners one click at a time.
+  func shapeMenu() -> NSMenu {
+    let menu = NSMenu(title: "Shape")
+    guard let canvas else { return menu }
+    let corners = menu.addItem(withTitle: "Corners", action: nil, keyEquivalent: "")
+    corners.image = NSImage(systemSymbolName: "pentagon", accessibilityDescription: nil)
+    corners.toolTip = "Click each corner, then press Return"
+    corners.state = canvas.shapePreset == nil ? .on : .off
+    menu.addItem(.separator())
+    for preset in ShapePreset.allCases {
+      let item = menu.addItem(withTitle: preset.title, action: nil, keyEquivalent: "")
+      item.image = Self.shapeImage(preset)
+      item.representedObject = preset.rawValue
+      item.state = canvas.shapePreset == preset ? .on : .off
+    }
+    MenuRelay { [weak self, weak canvas] item in
+      canvas?.shapePreset = (item.representedObject as? String).flatMap(ShapePreset.init(rawValue:))
+      self?.update()
+    }.attach(to: menu)
+    return menu
+  }
+
+  static func shapeImage(_ preset: ShapePreset) -> NSImage {
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { rect in
+      guard let context = NSGraphicsContext.current?.cgContext else { return false }
+      context.addPath(preset.path(in: rect.insetBy(dx: 2, dy: 2)))
+      context.setStrokeColor(NSColor.black.cgColor)
+      context.setLineWidth(1.4)
+      context.setLineJoin(.round)
+      context.strokePath()
+      return true
+    }
+    image.isTemplate = true
+    return image
   }
 
   /// Layers, alignment, grouping, and the rest, as the Arrange menu has them.

@@ -467,8 +467,9 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
           dense.append(CGPoint(x: last.x + (p.x - last.x) * t, y: last.y + (p.y - last.y) * t))
         }
       }
-      for brush in Element.Brush.allCases {
-        let gaps = try covered(dense, size: brush == .highlighter ? 24 : 10, brush: brush)
+      // The airbrush sprays dots with space between, as it should.
+      for brush in Element.Brush.allCases where brush != .airbrush {
+        let gaps = try covered(dense, size: brush == .highlighter || brush == .calligraphy ? 24 : 10, brush: brush)
         #expect(gaps.isEmpty, "\(brush) left holes at \(gaps.prefix(5))")
       }
     }
@@ -494,8 +495,8 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
         let t = CGFloat(i) / 600 * .pi * 1.6
         raw.append(CGPoint(x: 150 + cos(t) * 90 + random() * 3, y: 150 + sin(t) * 90 + random() * 3))
       }
-      for brush in Element.Brush.allCases {
-        let size: CGFloat = brush == .highlighter ? 24 : 12
+      for brush in Element.Brush.allCases where brush != .airbrush {
+        let size: CGFloat = brush == .highlighter || brush == .calligraphy ? 24 : 12
         let (points, _) = Freehand.smoothed(raw)
         let gaps = try covered(points, size: size, brush: brush)
         #expect(gaps.isEmpty, "\(brush) left \(gaps.count) holes, at \(gaps.prefix(3))")

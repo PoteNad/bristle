@@ -79,6 +79,11 @@ public struct Element: Equatable, Sendable, Identifiable {
     case highlighter
     /// Square pixels on a grid the size of the width, as a paint program's pencil draws them.
     case pixel
+    /// A broad nib held at an angle: thick one way, thin the other, as MS Paint's calligraphy
+    /// brush draws.
+    case calligraphy
+    /// A soft spray of dots, as MS Paint's airbrush sprays.
+    case airbrush
   }
 
   public enum Arrowhead: String, CaseIterable, Sendable { case none, arrow, triangle, circle, bar }

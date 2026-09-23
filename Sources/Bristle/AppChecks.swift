@@ -194,11 +194,11 @@
         }
         let toolbar = windows[0].toolbar?.items.map(\.itemIdentifier.rawValue) ?? []
         let tools = editor.toolGroups.flatMap { $0.subitems.map(\.label) }
-        guard toolbar == ["NSToolbarFlexibleSpaceItem", "draw", "shapes", "NSToolbarFlexibleSpaceItem", "share", "palette"],
+        guard toolbar.filter({ !$0.hasPrefix("NSToolbar") }) == ["draw", "shapes", "share", "palette"],
           tools == ["Select", "Draw", "Eraser", "Fill", "Rectangle", "Ellipse", "Polygon", "Line", "Arrow", "Text", "Image"],
           editor.currentSlot == .select
         else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
-        guard !editor.paletteVisible, editor.styleBar.bar.isHidden, !editor.zoomBar.bar.isHidden,
+        guard !editor.paletteVisible, !editor.zoomBar.bar.isHidden,
           !editor.canvasBar.bar.isHidden, document.drawing.scene.frame == nil
         else { fail("a new window should show an endless canvas with only the zoom and canvas bars") }
         controller.newWindowForTab(nil)
@@ -419,6 +419,42 @@
           return button
         }
 
+        // Coloring the canvas is an edit like any other, however it's done.
+        @MainActor func edited(_ name: String, _ body: () -> Void) {
+          document.updateChangeCount(.changeCleared)
+          body()
+          RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+          guard document.isDocumentEdited else { fail("\(name) should mark the drawing edited") }
+        }
+        edited("adding a frame") { press(barButton(editor.canvasBar.bar, "Add Frame")) }
+        editor.window?.makeFirstResponder(canvas)
+        edited("filling the frame") {
+          canvas.tool = .fill
+          click(canvas.scene.frame!.center, in: canvas)
+        }
+        guard canvas.scene.paper.background != nil else { fail("the fill tool should color the frame") }
+        edited("choosing a background") {
+          let item = NSMenuItem(title: "White", action: #selector(Editor.chooseBackground(_:)), keyEquivalent: "")
+          item.tag = 1
+          grouped(undo) { editor.chooseBackground(item) }
+        }
+        edited("a background swatch in the Palette") {
+          canvas.tool = .select
+          editor.togglePalette(nil)
+          editor.window?.contentView?.layoutSubtreeIfNeeded()
+          guard let swatch = allButtons(in: editor.palette.view).first(where: {
+            $0 is SwatchButton && !["None", "White", "Other Colors…"].contains($0.toolTip ?? "")
+          }) else {
+            fail("the Palette should offer background colors")
+          }
+          press(swatch)
+          editor.togglePalette(nil)
+        }
+        grouped(undo) { canvas.drawing.edit("Reset") { $0 = Scene() } }
+        canvas.tool = .select
+        document.updateChangeCount(.changeCleared)
+        pass("coloring the canvas marks the drawing edited, however it's done")
+
         // Every tool in the toolbar acts when clicked: the toolbar sends each tool's own action.
         for group in editor.toolGroups {
           for item in group.subitems where item.tag != Editor.Slot.image.rawValue {
@@ -434,18 +470,33 @@
         guard Controls.brushes.contains(canvas.tool), !editor.styleBar.bar.isHidden else {
           fail("Draw should choose a brush and show the style bar")
         }
-        press(barButton(editor.styleBar.bar, "Pencil"))
-        guard canvas.tool == .pencil, (barButton(editor.styleBar.bar, "Pencil") as? BarButton)?.isOn == true else {
-          fail("clicking Pencil in the bar should choose the pencil")
+        // The bar's brush menu lists every brush and chooses one.
+        @MainActor func chooseBrush(_ title: String) {
+          let menu = editor.styleBar.brushMenu()
+          guard let index = menu.items.firstIndex(where: { $0.title == title }) else {
+            fail("the brush menu should offer \(title): \(menu.items.map(\.title))")
+          }
+          menu.performActionForItem(at: index)
+          editor.window?.contentView?.layoutSubtreeIfNeeded()
         }
-        press(barButton(editor.styleBar.bar, "Brush"))
+        guard editor.styleBar.brushMenu().items.map(\.title) == Controls.brushes.map(\.title) else {
+          fail("the brush menu should list every brush")
+        }
+        chooseBrush("Pencil")
+        guard canvas.tool == .pencil, barButton(editor.styleBar.bar, "Brush: Pencil").toolTip == "Brush: Pencil" else {
+          fail("choosing Pencil from the bar should choose the pencil and show it")
+        }
+        chooseBrush("Brush")
         press(barButton(editor.styleBar.bar, "Bold"))
         guard canvas.tool == .pen, canvas.style.strokeWidth == Controls.widths(for: .pen)[2] else {
           fail("clicking Brush and Bold in the bar should choose the brush at its boldest, got \(canvas.tool) \(canvas.style.strokeWidth)")
         }
         press(barButton(editor.styleBar.bar, "Medium"))
         editor.choose(.select)
-        guard editor.styleBar.bar.isHidden else { fail("Select with nothing selected should hide the style bar") }
+        editor.styleBar.update()
+        guard !editor.styleBar.bar.isHidden, (barButton(editor.styleBar.bar, "Box Selection") as? BarButton)?.isOn == true else {
+          fail("Select with nothing selected should offer box and free-form selection")
+        }
         // The brush button slides the Palette in and away.
         guard let brush = editor.window?.toolbar?.items.first(where: { $0.itemIdentifier == Editor.paletteToolbarItem }),
           let action = brush.action
@@ -610,8 +661,8 @@
 
         // The pixel brush paints squares on the pixel grid, and the style popover sets any width.
         editor.choose(.draw)
-        press(barButton(editor.styleBar.bar, "Pixel"))
-        guard canvas.tool == .pixel else { fail("clicking Pixel should choose the pixel brush") }
+        chooseBrush("Pixel")
+        guard canvas.tool == .pixel else { fail("choosing Pixel should choose the pixel brush") }
         let dot = CGPoint(x: c.x - 250.3, y: c.y + 260.6)
         drag(line(from: dot, to: CGPoint(x: dot.x + 40, y: dot.y + 10)), in: canvas)
         guard let pixels = canvas.scene.elements.last, pixels.brush == .pixel, pixels.points.count == 41,
@@ -628,6 +679,48 @@
         style.close()
         canvas.setStyle("Width") { $0.strokeWidth = 1 }
         pass("the pixel brush paints on the pixel grid, and the style popover sets any width")
+
+        // Calligraphy is thick across its nib and thin along it; the airbrush sprays dots.
+        chooseBrush("Calligraphy")
+        let nib = CGPoint(x: c.x - 250, y: c.y + 320)
+        drag(line(from: nib, to: CGPoint(x: nib.x + 120, y: nib.y), steps: 20), in: canvas)
+        guard let pen = canvas.scene.elements.last, pen.brush == .calligraphy else { fail("the calligraphy brush should draw") }
+        chooseBrush("Airbrush")
+        drag(line(from: CGPoint(x: nib.x, y: nib.y + 60), to: CGPoint(x: nib.x + 120, y: nib.y + 60), steps: 20), in: canvas)
+        guard let spray = canvas.scene.elements.last, spray.brush == .airbrush else { fail("the airbrush should spray") }
+        pass("the calligraphy brush and the airbrush draw from the brush menu")
+
+        // A shape from the gallery is drawn with one drag and stays an editable polygon.
+        canvas.tool = .polygon
+        let shapes = editor.styleBar.shapeMenu()
+        guard let star = shapes.items.firstIndex(where: { $0.title == "Star" }) else { fail("the shape menu should offer a star") }
+        shapes.performActionForItem(at: star)
+        let starBox = CGRect(x: c.x + 150, y: c.y + 300, width: 100, height: 90)
+        drag(line(from: starBox.origin, to: CGPoint(x: starBox.maxX, y: starBox.maxY)), in: canvas, flags: .command)
+        guard let drawn = canvas.scene.elements.last, drawn.kind == .polygon, drawn.points.count == 10, same(drawn.frame, starBox) else {
+          fail("dragging with the star should draw a ten-cornered polygon filling the box, got \(String(describing: canvas.scene.elements.last?.frame))")
+        }
+        canvas.shapePreset = nil
+
+        // A free-form loop selects what's inside it.
+        canvas.tool = .select
+        canvas.select([])
+        editor.styleBar.update()
+        press(barButton(editor.styleBar.bar, "Free-Form Selection"))
+        guard canvas.lassoSelects else { fail("clicking Free-Form Selection should draw loops") }
+        let loop = [
+          CGPoint(x: starBox.minX - 20, y: starBox.minY - 20), CGPoint(x: starBox.maxX + 20, y: starBox.minY - 20),
+          CGPoint(x: starBox.maxX + 20, y: starBox.maxY + 20), CGPoint(x: starBox.minX - 20, y: starBox.maxY + 20), CGPoint(x: starBox.minX - 20, y: starBox.minY - 10),
+        ]
+        drag(loop, in: canvas)
+        guard canvas.drawing.selection == [drawn.id] else { fail("the loop should select the star alone, got \(canvas.drawing.selection)") }
+        canvas.lassoSelects = false
+        canvas.invertSelection(nil)
+        guard !canvas.drawing.selection.contains(drawn.id), !canvas.drawing.selection.isEmpty else {
+          fail("Invert Selection should select everything but the star")
+        }
+        canvas.select([])
+        pass("shapes from the gallery, free-form selection, and Invert Selection work")
 
         // The frame: the bar's button adds one; it's picked by its label, moved, and removed.
         canvas.tool = .select
@@ -648,7 +741,7 @@
         canvas.tool = .eraser
         editor.styleBar.update()
         guard !canvas.frameSelected,
-          editor.styleBar.bar.buttons.contains(where: { $0.toolTip == "Erase Objects" })
+          editor.styleBar.bar.buttons.contains(where: { $0.toolTip?.hasPrefix("Object Eraser") == true })
         else { fail("choosing the eraser should let go of the frame and show the eraser's settings") }
         canvas.tool = .select
         click(canvas.frameLabelRect(canvas.scene.frame!).center, in: canvas)
@@ -782,6 +875,8 @@
             c.center(on: CGPoint(x: 1004, y: 1003))
             c.tool = .pixel
           }
+          if environment["BRISTLE_PALETTE"] == "1" { target.togglePalette(nil) }
+          if let slot = environment["BRISTLE_SLOT"].flatMap(Int.init).flatMap(Editor.Slot.init(rawValue:)) { target.choose(slot) }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
           if environment["BRISTLE_TYPE"] == "1" {
             target.canvas.tool = .text
@@ -801,12 +896,36 @@
           {
             target.canvas.select([element.id])
           }
+          if environment["BRISTLE_HOVER"] == "bar", let bar = target.window?.contentView {
+            // The pointer just above the style bar, so its ring shows passing behind it.
+            let point = NSPoint(x: bar.bounds.midX - 40, y: 64)
+            target.canvas.styles[.eraser, default: Tool.eraser.defaultStyle].strokeWidth = 48
+            target.canvas.hoverPoint = target.canvas.convert(point, from: nil)
+          }
+          if let preset = environment["BRISTLE_SHAPE"].flatMap(ShapePreset.init(rawValue:)) {
+            target.canvas.tool = .polygon
+            target.canvas.shapePreset = preset
+          }
+          target.styleBar.update()
+          if let tip = environment["BRISTLE_PRESS"] {
+            target.window?.contentView?.layoutSubtreeIfNeeded()
+            if let button = target.styleBar.bar.buttons.first(where: { $0.toolTip?.hasPrefix(tip) == true }) {
+              click(CGPoint(x: button.bounds.midX, y: button.bounds.midY), in: button)
+            }
+          }
           _ = canvas
           after(environment["BRISTLE_WAIT"].flatMap(Double.init) ?? 1) {
             guard let window = target.window else { fail("no window to capture") }
             let capture = Process()
             capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), path]
+            // A popover is drawn from its own view, since it's a window of its own.
+            if let popover = target.styleBar.popover, popover.isShown, let view = popover.contentViewController?.view,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+            {
+              view.cacheDisplay(in: view.bounds, to: rep)
+              try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path + ".popover.png"))
+            }
             try? capture.run()
             capture.waitUntilExit()
             pass("wrote \(path)")

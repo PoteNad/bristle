@@ -122,7 +122,7 @@ final class Controls {
   static let sizes: [(String, CGFloat)] = [("S", 16), ("M", 24), ("L", 36), ("XL", 56)]
   /// Every text size the size menu offers.
   static let pointSizes: [CGFloat] = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 56, 64, 72, 96, 128]
-  static let brushes: [Tool] = [.pencil, .pen, .highlighter, .pixel]
+  static let brushes: [Tool] = [.pencil, .pen, .highlighter, .calligraphy, .airbrush, .pixel]
 
   weak var canvas: CanvasView?
   private var targets: [ClosureTarget] = []
@@ -157,7 +157,7 @@ final class Controls {
     guard let canvas else { return [] }
     if !elements.isEmpty { return Set(elements.map(\.kind)) }
     switch canvas.tool {
-    case .pencil, .pen, .highlighter, .pixel: return [.freehand]
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush: return [.freehand]
     case .line: return [.line]
     case .arrow: return [.arrow]
     case .rectangle: return [.rectangle]
@@ -180,17 +180,13 @@ final class Controls {
   var key: String {
     guard let canvas else { return "" }
     let elements = self.elements
-    return "\(canvas.tool)|\(kinds.map(\.rawValue).sorted())|\(elements.count)|\(elements.contains { !$0.groups.isEmpty })|\(elements.first?.brush.rawValue ?? "")|\(canvas.drawing.selectedElements.contains(where: \.locked))|\(canvas.frameSelected)"
+    return "\(canvas.tool)|\(canvas.shapePreset?.rawValue ?? "")|\(canvas.lassoSelects)|\(kinds.map(\.rawValue).sorted())|\(elements.count)|\(elements.contains { !$0.groups.isEmpty })|\(elements.first?.brush.rawValue ?? "")|\(canvas.drawing.selectedElements.contains(where: \.locked))|\(canvas.frameSelected)"
   }
 
   /// The brush of the selected strokes, as the tool that draws them.
   var brushTool: Tool {
-    switch elements.first?.brush {
-    case .pencil: .pencil
-    case .highlighter: .highlighter
-    case .pixel: .pixel
-    default: .pen
-    }
+    let brush = elements.first?.brush ?? .pen
+    return Controls.brushes.first { $0.brush == brush } ?? .pen
   }
 
   /// The tool whose widths the width controls offer.
@@ -207,6 +203,8 @@ final class Controls {
     case .pen: [4, 8, 16]
     case .highlighter: [14, 24, 40]
     case .pixel: [1, 2, 4]
+    case .calligraphy: [6, 10, 18]
+    case .airbrush: [16, 28, 48]
     case .eraser, .strokeEraser: [10, 24, 48]
     default: [2, 4, 8]
     }
@@ -238,7 +236,7 @@ final class Controls {
     switch tool {
     case .pixel: 1...16
     case .eraser, .strokeEraser: 4...120
-    case .highlighter: 4...80
+    case .highlighter, .airbrush: 4...120
     default: 0.5...48
     }
   }
@@ -375,7 +373,23 @@ final class Controls {
     return swatches + [custom]
   }
 
-  func opacitySlider() -> NSSlider {
+  /// A slider for the opacity, with the percentage beside it.
+  func opacitySlider() -> NSView {
+    let slider = opacityControl()
+    let label = NSTextField(labelWithString: "")
+    label.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    label.textColor = .secondaryLabelColor
+    label.alignment = .right
+    label.widthAnchor.constraint(equalToConstant: 34).isActive = true
+    refreshers.append { [weak self, weak label] in
+      label?.stringValue = "\(Int(((self?.style.opacity ?? 1) * 100).rounded()))%"
+    }
+    let row = NSStackView(views: [slider, label])
+    row.spacing = 8
+    return row
+  }
+
+  private func opacityControl() -> NSSlider {
     let slider = NSSlider(value: 100, minValue: 5, maxValue: 100, target: nil, action: nil)
     slider.isContinuous = true
     slider.controlSize = .small

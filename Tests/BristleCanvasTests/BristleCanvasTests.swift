@@ -112,3 +112,30 @@ func rectangle(_ frame: CGRect, id: String = Element.newID()) -> Element {
     #expect(Tool.allCases.allSatisfy { NSImage(systemSymbolName: $0.symbol, accessibilityDescription: nil) != nil })
   }
 }
+
+@MainActor @Suite struct Photos {
+  @Test func removingTheBackgroundKeepsTheSubject() throws {
+    guard #available(macOS 14.0, *) else { return }
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Assets/Bristle-Screenshot.png")
+    let data = try Data(contentsOf: url)
+    let original = try #require(ImageStore.decode(data))
+    let cut = try #require(CanvasView.subject(of: data))
+    let image = try #require(ImageStore.decode(cut))
+    #expect(image.width == original.width && image.height == original.height)
+    let w = image.width, h = image.height
+    let context = try #require(
+      CGContext(
+        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+    let pixels = try #require(context.data).assumingMemoryBound(to: UInt8.self)
+    var clear = 0, kept = 0
+    for y in stride(from: 0, to: h, by: 16) {
+      for x in stride(from: 0, to: w, by: 16) {
+        if pixels[y * context.bytesPerRow + x * 4 + 3] < 20 { clear += 1 } else { kept += 1 }
+      }
+    }
+    // Something is kept and something made clear.
+    #expect(clear > 0 && kept > 0)
+  }
+}

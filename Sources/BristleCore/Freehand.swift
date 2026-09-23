@@ -21,6 +21,14 @@ public enum Freehand {
 
   /// The radius of the stroke at each point.
   static func radii(_ points: [CGPoint], pressures: [CGFloat], size: CGFloat, brush: Element.Brush) -> [CGFloat] {
+    if brush == .calligraphy {
+      // The nib is held at 45°: full width across that angle, a hairline along it.
+      return points.indices.map { i in
+        let a = points[max(0, i - 1)], b = points[min(points.count - 1, i + 1)]
+        let angle = atan2(b.y - a.y, b.x - a.x)
+        return size / 2 * (0.15 + 0.85 * abs(sin(angle - .pi / 4)))
+      }
+    }
     guard brush == .pen else { return Array(repeating: size / 2, count: points.count) }
     let pressures = pressures.count == points.count ? pressures : simulatedPressures(points, size: size)
     var result = pressures.map { size / 2 * (0.3 + 0.7 * $0) }
@@ -97,6 +105,7 @@ public enum Freehand {
       for p in points { path.addRect(CGRect(x: p.x - side / 2, y: p.y - side / 2, width: side, height: side)) }
       return path
     }
+    if brush == .airbrush { return spray(points, size: size) }
     let size = max(size, 0.5)
     let radii = radii(points, pressures: pressures, size: size, brush: brush)
     // Points closer together than this add nothing but noise to the edges.
@@ -167,6 +176,33 @@ public enum Freehand {
     if round {
       circle(p[0], r[0])
       circle(p[p.count - 1], r[r.count - 1])
+    }
+    return path
+  }
+
+  /// Dots scattered around each point, the same every time the stroke is drawn, as a spray can
+  /// leaves them.
+  static func spray(_ points: [CGPoint], size: CGFloat) -> CGPath {
+    let path = CGMutablePath()
+    let radius = max(size, 1) / 2
+    let dot = max(0.4, size * 0.025)
+    var last: CGPoint?
+    for (i, p) in points.enumerated() {
+      // About the same number of dots however fast the pointer moved.
+      let travelled = last.map { $0.distance(to: p) } ?? radius
+      last = p
+      let count = max(1, Int((travelled / max(radius, 1) * size * 0.9).rounded()))
+      var seed = UInt64(truncatingIfNeeded: i &* 2_654_435_761) ^ 0x9E37_79B9_7F4A_7C15
+      func random() -> CGFloat {
+        seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return CGFloat(seed >> 11) / CGFloat(1 << 53)
+      }
+      for _ in 0..<min(count, 400) {
+        // Denser in the middle, as paint from a can is.
+        let r = radius * random() * random().squareRoot()
+        let a = random() * .pi * 2
+        path.addEllipse(in: CGRect(x: p.x + cos(a) * r - dot, y: p.y + sin(a) * r - dot, width: dot * 2, height: dot * 2))
+      }
     }
     return path
   }

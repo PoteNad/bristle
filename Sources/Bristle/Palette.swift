@@ -124,15 +124,15 @@ final class Palette: NSViewController {
       ) { [weak canvas] i in canvas?.tool = Controls.brushes[i] })
     }
     if selecting && kinds == [.freehand] {
-      let brushes = Element.Brush.allCases
+      let brushes = Controls.brushes.compactMap(\.brush)
       add("Brush", c.segmented(
         symbols: Controls.brushes.map { ($0.symbol, $0.title) },
         selected: { [weak c] in c?.elements.first.map { brushes.firstIndex(of: $0.brush) ?? 0 } }
       ) { [weak c] i in c?.setBrush(brushes[i]) })
     }
     if tool == .eraser || tool == .strokeEraser, !selecting {
-      add("Erase", c.segmented(labels: ["Objects", "Parts"], selected: { canvas.tool == .strokeEraser ? 1 : 0 }) {
-        [weak canvas] i in canvas?.tool = i == 0 ? .eraser : .strokeEraser
+      add("Erase", c.segmented(labels: ["Pixel", "Object"], selected: { canvas.tool == .strokeEraser ? 0 : 1 }) {
+        [weak canvas] i in canvas?.tool = i == 0 ? .strokeEraser : .eraser
       })
       add("Size", widthControl())
     }
