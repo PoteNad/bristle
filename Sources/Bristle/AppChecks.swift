@@ -616,6 +616,10 @@
             c.beginTextEditing(text.id)
           }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
+          if environment["BRISTLE_PALETTE"] == "1" {
+            target.choose(.draw)
+            target.drawBar.swatch.performClick(nil)
+          }
           _ = canvas
           after(environment["BRISTLE_WAIT"].flatMap(Double.init) ?? 1) {
             guard let window = target.window else { fail("no window to capture") }
@@ -624,6 +628,14 @@
             capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), path]
             try? capture.run()
             capture.waitUntilExit()
+            // With the Palette open, capture it too.
+            if let palette = PaletteViewController.current?.contentViewController?.view.window {
+              let popover = Process()
+              popover.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+              popover.arguments = ["-x", "-o", "-l", String(palette.windowNumber), path.replacingOccurrences(of: ".png", with: "-palette.png")]
+              try? popover.run()
+              popover.waitUntilExit()
+            }
             pass("wrote \(path)")
             finish()
           }
