@@ -4,7 +4,7 @@ import BristleCore
 /// What dragging on the canvas does.
 public enum Tool: String, CaseIterable, Sendable {
   case select
-  case pencil, pen, highlighter
+  case pencil, pen, highlighter, pixel
   case eraser, strokeEraser
   case line, arrow
   case rectangle, ellipse, polygon
@@ -18,6 +18,7 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pencil: "Pencil"
     case .pen: "Brush"
     case .highlighter: "Highlighter"
+    case .pixel: "Pixel"
     case .eraser: "Eraser"
     case .strokeEraser: "Stroke Eraser"
     case .line: "Line"
@@ -38,6 +39,7 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pencil: "p"
     case .pen: "b"
     case .highlighter: "m"
+    case .pixel: "x"
     case .eraser: "e"
     case .strokeEraser: ""
     case .line: "l"
@@ -57,6 +59,7 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pencil: "pencil"
     case .pen: "paintbrush.pointed"
     case .highlighter: "highlighter"
+    case .pixel: "checkerboard.rectangle"
     case .eraser: "eraser"
     case .strokeEraser: "eraser.line.dashed"
     case .line: "line.diagonal"
@@ -76,6 +79,7 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pencil: .pencil
     case .pen: .pen
     case .highlighter: .highlighter
+    case .pixel: .pixel
     default: nil
     }
   }
@@ -86,6 +90,7 @@ public enum Tool: String, CaseIterable, Sendable {
     case .pencil: Style(strokeWidth: 3)
     case .pen: Style(strokeWidth: 8)
     case .highlighter: Style(stroke: Color(hex: "#FFD60A"), strokeWidth: 24, opacity: 0.45)
+    case .pixel: Style(strokeWidth: 1)
     case .line: Style(strokeWidth: 3)
     case .arrow: Style(strokeWidth: 3, endArrowhead: .arrow)
     case .rectangle, .ellipse, .polygon: Style(strokeWidth: 3)

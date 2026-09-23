@@ -105,7 +105,7 @@ final class Palette: NSViewController {
     let kinds = self.kinds
     title(heading)
     if canvas.drawing.selectedElements.contains(where: \.locked) && elements.isEmpty {
-      note("Locked objects can’t be changed. Choose Arrange ▸ Unlock All to change them.")
+      note("Locked. Arrange ▸ Unlock All (⌥⌘L) unlocks it.")
       return
     }
     if kinds.isEmpty && ![Tool.eraser, .strokeEraser, .fill].contains(canvas.tool) {
@@ -220,6 +220,7 @@ final class Palette: NSViewController {
       return names.count == 1 ? "\(selected.count) \(names.first!)s".replacingOccurrences(of: "Texts", with: "Text Boxes") : "\(selected.count) Objects"
     }
     if canvas.tool == .select || canvas.tool == .eyedropper { return "Canvas" }
+    if Controls.brushes.contains(canvas.tool) { return "Draw" }
     return canvas.tool.title
   }
 
@@ -269,7 +270,7 @@ final class Palette: NSViewController {
     size.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
     controls.onRefresh { [weak canvas] in
       guard let canvas else { return }
-      size.stringValue = canvas.scene.frame.map { "\(Int($0.width)) × \(Int($0.height)) points" } ?? "None — the canvas is endless"
+      size.stringValue = canvas.scene.frame.map { "\(Int($0.width)) × \(Int($0.height))" } ?? "None"
     }
     let change = NSButton(title: "Frame Size…", target: editor, action: #selector(Editor.showFrameSize(_:)))
     let fit = NSButton(title: "Fit to Drawing", target: canvas, action: #selector(CanvasView.fitCanvasToDrawing(_:)))
@@ -284,16 +285,21 @@ final class Palette: NSViewController {
     add("Background", controls.colorRow(Controls.fills, allowsNone: true, value: { [weak canvas] in canvas?.scene.paper.background }) {
       [weak canvas] color in canvas?.drawing.edit(color == nil ? "Clear Background" : "Background") { $0.paper.background = color }
     })
-    divider()
-    note("Choose a tool in the toolbar to draw, or select something to change how it looks. A frame marks the part of the canvas that’s exported and printed.")
   }
 
-  /// Three widths, as Excalidraw offers, suited to the tool.
+  /// Three widths, as Excalidraw offers, suited to the tool, and a slider for any other.
   private func widthControl() -> NSView {
     let images = (0..<3).map { i in (Controls.lineImage(CGFloat(i) * 2.5 + 1.5), Controls.widthNames[i]) }
-    return controls.segmented(images: images, selected: { [weak controls] in controls?.widthIndex }) { [weak controls] i in
+    let presets = controls.segmented(images: images, selected: { [weak controls] in controls?.widthIndex }) { [weak controls] i in
       controls?.setWidth(i)
     }
+    let slider = controls.widthSlider()
+    let column = NSStackView(views: [presets, slider])
+    column.orientation = .vertical
+    column.spacing = 8
+    presets.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+    slider.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+    return column
   }
 
   private func buttons(_ items: [(String, String, Selector)], tags: Bool = false) -> NSView {

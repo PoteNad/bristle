@@ -73,6 +73,8 @@ public enum Renderer {
     if element.rotation != 0 { context.concatenate(element.transform) }
     switch element.kind {
     case .freehand:
+      // Pixels keep hard edges, as they would in a paint program.
+      if element.brush == .pixel { context.setShouldAntialias(false) }
       context.setFillColor((element.stroke ?? .ink).cgColor)
       context.addPath(element.path)
       context.fillPath(using: .winding)
@@ -153,7 +155,8 @@ public enum Renderer {
     full = full.offsetBy(dx: -frame.midX, dy: -frame.midY)
     // The context is flipped, so draw the image upside down in local space to show it upright.
     full.origin.y = -full.maxY
-    context.interpolationQuality = .high
+    // A canvas zoomed in far asks for the image's own pixels, drawn square.
+    if context.interpolationQuality != .none { context.interpolationQuality = .high }
     context.draw(image, in: full)
     context.restoreGState()
   }

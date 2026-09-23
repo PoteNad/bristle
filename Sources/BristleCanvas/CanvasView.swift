@@ -56,6 +56,8 @@ public final class CanvasView: NSView {
         selectionBeforeEyedropper = drawing.selection
       }
       finishInteraction()
+      // Choosing a tool lets go of the frame, so the bar shows the tool's settings.
+      if tool != .select { frameSelected = false }
       if tool != .select {
         endTextEditing()
         croppingID = nil
@@ -182,6 +184,13 @@ public final class CanvasView: NSView {
     setFrameSize(rect.size)
     setBoundsOrigin(rect.origin)
     if keepingVisible { scroll(visible.origin) }
+    // AppKit leaves a subview's layer where it was when the bounds origin moves, so the text
+    // being typed is put back over its element.
+    if let editor = textEditor {
+      let frame = editor.frame
+      editor.frame = .zero
+      editor.frame = frame
+    }
   }
 
   /// The middle of what's in view, kept while the window or the sidebar beside it changes size.
@@ -271,13 +280,15 @@ public final class CanvasView: NSView {
   /// The canvas behind the drawing: its own color, or else one that follows the appearance, near
   /// white in light and near black in dark, as Freeform's board does.
   var canvasColor: CGColor {
-    if let background = scene.paper.background { return background.cgColor }
-    return isDarkCanvas ? CGColor(srgbRed: 0.118, green: 0.118, blue: 0.122, alpha: 1) : .white
+    if let background = scene.paper.background, scene.frame == nil { return background.cgColor }
+    return appearanceIsDark ? CGColor(srgbRed: 0.118, green: 0.118, blue: 0.122, alpha: 1) : .white
   }
+
+  private var appearanceIsDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
 
   /// Whether the drawing is shown for a dark canvas, with its lightness turned around.
   var isDarkCanvas: Bool {
-    scene.paper.background == nil && effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    scene.paper.background == nil && appearanceIsDark
   }
 
   public override func viewDidChangeEffectiveAppearance() {
@@ -290,7 +301,14 @@ public final class CanvasView: NSView {
     let scale = magnification
     context.setFillColor(canvasColor)
     context.fill(dirtyRect)
+    // A background colors only the frame, the part that's exported, when there is one.
+    if let background = scene.paper.background, let frame = scene.frame {
+      context.setFillColor(background.cgColor)
+      context.fill(frame.intersection(dirtyRect))
+    }
     drawGrid(in: context, dirty: dirtyRect, scale: scale)
+    // Zoomed in far, images show their own square pixels, as paint programs show them.
+    context.interpolationQuality = scale >= 3 ? .none : .high
     var rects: UnsafePointer<NSRect>?
     var count = 0
     getRectsBeingDrawn(&rects, count: &count)
@@ -317,6 +335,7 @@ public final class CanvasView: NSView {
         draw(element, in: context)
       }
     }
+    drawPixelGrid(in: context, dirty: dirtyRect, scale: scale)
     drawFrame(in: context, dirty: dirtyRect, scale: scale)
     drawInteraction(in: context, scale: scale)
     drawSelection(in: context, scale: scale)
@@ -359,7 +378,8 @@ public final class CanvasView: NSView {
 
   /// A grid of dots, as Freeform draws.
   private func drawGrid(in context: CGContext, dirty: CGRect, scale: CGFloat) {
-    guard configuration.showsGrid else { return }
+    // The pixel grid takes over when zoomed in far.
+    guard configuration.showsGrid, scale < Self.pixelGridZoom else { return }
     var spacing = configuration.gridSpacing
     while spacing * scale < 14 { spacing *= 2 }
     let dot = max(1 / scale, 0.25)
@@ -373,6 +393,32 @@ public final class CanvasView: NSView {
       }
       y += spacing
     }
+  }
+
+  /// Zoomed in far enough to see single pixels, a line between each, as in a paint program.
+  /// Exports are one pixel per point, so these are the pixels a PNG will have.
+  public static let pixelGridZoom: CGFloat = 8
+
+  private func drawPixelGrid(in context: CGContext, dirty: CGRect, scale: CGFloat) {
+    guard configuration.showsGrid, scale >= Self.pixelGridZoom else { return }
+    context.saveGState()
+    defer { context.restoreGState() }
+    let fade = min(1, (scale - Self.pixelGridZoom) / Self.pixelGridZoom + 0.5)
+    context.setStrokeColor(appearanceIsDark ? CGColor(gray: 1, alpha: 0.12 * fade) : CGColor(gray: 0, alpha: 0.1 * fade))
+    context.setLineWidth(1 / scale)
+    var x = dirty.minX.rounded(.down)
+    while x <= dirty.maxX {
+      context.move(to: CGPoint(x: x, y: dirty.minY))
+      context.addLine(to: CGPoint(x: x, y: dirty.maxY))
+      x += 1
+    }
+    var y = dirty.minY.rounded(.down)
+    while y <= dirty.maxY {
+      context.move(to: CGPoint(x: dirty.minX, y: y))
+      context.addLine(to: CGPoint(x: dirty.maxX, y: y))
+      y += 1
+    }
+    context.strokePath()
   }
 
   /// The frame's outline, with its size above its top-left corner, as Excalidraw labels frames.
@@ -389,7 +435,8 @@ public final class CanvasView: NSView {
       .font: NSFont.systemFont(ofSize: 11 / scale, weight: .medium),
       .foregroundColor: selected ? NSColor.controlAccentColor : NSColor.secondaryLabelColor,
     ]
-    NSAttributedString(string: label, attributes: attributes).draw(at: CGPoint(x: frame.minX, y: frame.minY - 16 / scale))
+    // Clear of the corner handle, so the label reads whole when the frame is picked.
+    NSAttributedString(string: label, attributes: attributes).draw(at: CGPoint(x: frame.minX, y: frame.minY - 21 / scale))
     if selected, !frameIsLocked { drawFrameHandles(frame, in: context, scale: scale) }
   }
 
@@ -398,7 +445,7 @@ public final class CanvasView: NSView {
   /// The frame's label, which is clicked to pick the frame.
   func frameLabelRect(_ frame: CGRect) -> CGRect {
     let width = (CGFloat(frameLabel(frame).count) * 6.5 + 8) / magnification
-    return CGRect(x: frame.minX, y: frame.minY - 18 / magnification, width: width, height: 16 / magnification)
+    return CGRect(x: frame.minX, y: frame.minY - 23 / magnification, width: width, height: 17 / magnification)
   }
 
   private func drawGuides(in context: CGContext, scale: CGFloat) {

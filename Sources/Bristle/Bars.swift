@@ -39,7 +39,7 @@ final class Bar: NSView {
     row.orientation = .horizontal
     row.spacing = 2
     row.alignment = .centerY
-    row.edgeInsets = NSEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
+    row.edgeInsets = NSEdgeInsets(top: 0, left: 5, bottom: 0, right: 5)
     views.forEach(row.addArrangedSubview)
     let capsule = glass(around: row, cornerRadius: Self.height / 2)
     capsule.translatesAutoresizingMaskIntoConstraints = false
@@ -155,7 +155,9 @@ final class BarButton: NSButton {
   override func mouseExited(with event: NSEvent) { hovering = false }
 
   override func draw(_ dirtyRect: NSRect) {
-    let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 10, yRadius: 10)
+    // A capsule concentric with the bar's, so it never looks cut off at the bar's ends.
+    let box = bounds.insetBy(dx: 1, dy: 1)
+    let pill = NSBezierPath(roundedRect: box, xRadius: box.height / 2, yRadius: box.height / 2)
     let alpha: CGFloat = isHighlighted ? 0.16 : isOn ? 0.11 : hovering && isEnabled ? 0.07 : 0
     if alpha > 0 {
       NSColor.labelColor.withAlphaComponent(alpha).setFill()
@@ -329,7 +331,7 @@ final class CanvasBar: NSObject {
     grid.isOn = UserDefaults.standard.bool(forKey: PreferenceKey.showsGrid)
     let framed = canvas?.scene.frame != nil
     frame.isOn = framed
-    frame.toolTip = framed ? "Remove the frame" : "Add a frame: the part of the canvas that’s exported and printed"
+    frame.toolTip = framed ? "Remove Frame" : "Add Frame"
   }
 
   func optionsMenu() -> NSMenu {
@@ -464,9 +466,10 @@ final class StyleBar: NSObject {
         })
       }
       var line: [NSView] = []
-      if c.hasShapes || c.hasLines {
-        line.append(action(BarButton(image: Controls.dashImage(.dashed), title: "Line Style", target: nil, action: nil)) {
-          [weak self] sender in self?.showLineStyle(sender)
+      let erasing = !selecting && (tool == .eraser || tool == .strokeEraser)
+      if c.hasShapes || c.hasLines || kinds.contains(.freehand) || erasing {
+        line.append(action(BarButton(symbol: "slider.horizontal.3", title: "Style", target: nil, action: nil)) {
+          [weak self] sender in self?.showStyle(sender, erasing: erasing)
         })
       }
       if c.hasLines {
@@ -503,7 +506,7 @@ final class StyleBar: NSObject {
         let size = BarButton(text: "M", tip: "Text Size", menu: true, target: nil, action: nil)
         c.onRefresh { [weak c, weak size] in
           guard let c else { return }
-          size?.setText(Controls.sizes.first { abs($0.1 - c.style.fontSize) < 0.01 }?.0 ?? "\(Int(c.style.fontSize))", menu: true)
+          size?.setText("\(Int(c.style.fontSize.rounded()))", menu: true)
         }
         let align = BarButton(symbol: "text.alignleft", title: "Text Alignment", target: nil, action: nil)
         let symbols = ["text.alignleft", "text.aligncenter", "text.alignright"]
@@ -519,8 +522,9 @@ final class StyleBar: NSObject {
             }, from: sender)
           },
           action(size) { [weak canvas, weak c] sender in
-            popUpAbove(Self.menu(["Small", "Medium", "Large", "Extra Large"], chosen: Controls.sizes.firstIndex { abs($0.1 - (c?.style.fontSize ?? 0)) < 0.01 }) { i in
-              canvas?.setStyle("Change Font Size") { $0.fontSize = Controls.sizes[i].1 }
+            let sizes = Controls.pointSizes
+            popUpAbove(Self.menu(sizes.map { "\(Int($0)) pt" }, chosen: sizes.firstIndex { abs($0 - (c?.style.fontSize ?? 0)) < 0.01 }) { i in
+              canvas?.setStyle("Change Font Size") { $0.fontSize = sizes[i] }
             }, from: sender)
           },
           action(align) { [weak canvas, weak c] sender in
@@ -576,12 +580,14 @@ final class StyleBar: NSObject {
     }
   }
 
-  private func showLineStyle(_ sender: NSButton) {
+  /// The exact width, opacity, and line style, beyond the bar's three widths.
+  private func showStyle(_ sender: NSButton, erasing: Bool) {
     guard let canvas else { return }
     let popover = Controls()
     popover.canvas = canvas
-    var rows = popover.lineStyleControls()
-    if !controls.kinds.isEmpty { rows.append(("Opacity", popover.opacitySlider())) }
+    var rows: [(String, NSView)] = [(erasing ? "Size" : "Width", popover.widthSlider())]
+    rows += popover.lineStyleControls()
+    if !erasing && !controls.kinds.isEmpty { rows.append(("Opacity", popover.opacitySlider())) }
     show(popover, rows, from: sender)
   }
 

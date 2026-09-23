@@ -142,8 +142,11 @@ extension CanvasView {
     let color = locked ? NSColor.secondaryLabelColor.cgColor : accent
     context.setStrokeColor(color)
     context.setLineWidth(line)
-    // Each element of a larger selection gets a faint outline of its own.
-    if selected.count > 1 {
+    // Each selected object gets a dotted outline that follows its shape, as Freeform's do. A
+    // huge selection gets plain boxes, which cost far less to draw.
+    if selected.count <= 300 {
+      for element in selected { drawHalo(element, in: context, scale: scale) }
+    } else {
       context.saveGState()
       context.setAlpha(0.5)
       for element in selected {
@@ -186,6 +189,52 @@ extension CanvasView {
     for i in visibleHandles(box) {
       drawHandle(at: box.point(SelectionBox.units[i]), round: false, in: context, scale: scale, color: color, rotation: box.rotation)
     }
+  }
+
+  /// A dotted line a few points outside an object's own shape: around the ink of a stroke or
+  /// a line, around the outside of a shape, and around the box of text or an image.
+  func drawHalo(_ element: Element, in context: CGContext, scale: CGFloat) {
+    let gap = 5 / scale, width = 1.5 / scale
+    // The pieces the halo goes around, each filled on its own, since a shape and the band
+    // around its edge can turn opposite ways.
+    var pieces: [CGPath] = []
+    func band(_ path: CGPath, _ width: CGFloat) -> CGPath {
+      path.copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 1)
+    }
+    switch element.kind {
+    case .text, .image:
+      let box = element.frame.insetBy(dx: -gap, dy: -gap)
+      pieces.append(CGPath(roundedRect: box, cornerWidth: gap * 1.5, cornerHeight: gap * 1.5, transform: nil))
+    case .freehand:
+      let centre = CGMutablePath()
+      let points = element.points.map { CGPoint(x: $0.x + element.x, y: $0.y + element.y) }
+      centre.addLines(between: points.count == 1 ? [points[0], points[0]] : points)
+      pieces.append(band(centre, element.strokeWidth + gap * 2))
+    case .line, .arrow, .rectangle, .ellipse, .polygon:
+      let path = element.path
+      let stroke = element.stroke == nil ? 0 : element.strokeWidth
+      pieces.append(band(path, stroke + gap * 2))
+      if element.isClosed { pieces.append(path) }
+      for head in element.arrowheads { pieces.append(band(head.path, stroke + gap * 2)) }
+    }
+    if element.rotation != 0 { pieces = pieces.map { $0.copy(using: [element.transform]) ?? $0 } }
+    context.saveGState()
+    defer { context.restoreGState() }
+    // The dots are drawn along every edge, then the inside is cleared, so only the outer edge
+    // shows, however the pieces overlap.
+    context.beginTransparencyLayer(auxiliaryInfo: nil)
+    context.setStrokeColor(NSColor.secondaryLabelColor.cgColor)
+    context.setLineWidth(width * 2)
+    context.setLineCap(.round)
+    context.setLineDash(phase: 0, lengths: [0, 4 / scale])
+    for piece in pieces { context.addPath(piece) }
+    context.strokePath()
+    context.setBlendMode(.clear)
+    for piece in pieces {
+      context.addPath(piece)
+      context.fillPath(using: .winding)
+    }
+    context.endTransparencyLayer()
   }
 
   func drawHandle(

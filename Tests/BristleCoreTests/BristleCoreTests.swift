@@ -434,6 +434,75 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
     }
   }
 
+  @Suite struct Ink {
+    /// Fills a stroke into a bitmap and returns whether every point along it is covered.
+    func covered(_ points: [CGPoint], size: CGFloat, brush: Element.Brush) throws -> [CGPoint] {
+      let pressures = Freehand.simulatedPressures(points, size: size)
+      let path = Freehand.outline(points, pressures: pressures, size: size, brush: brush)
+      let context = try #require(
+        CGContext(
+          data: nil, width: 300, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+      context.addPath(path)
+      context.fillPath(using: .winding)
+      let data = try #require(context.data).assumingMemoryBound(to: UInt8.self)
+      // Look away from the tapered ends, where the brush is thinnest.
+      return points.dropFirst(8).dropLast(8).filter { p in
+        let pixel = data + (299 - Int(p.y.rounded())) * context.bytesPerRow + Int(p.x.rounded()) * 4
+        return pixel[3] < 250
+      }
+    }
+
+    @Test func strokesThatTurnBackHaveNoHoles() throws {
+      // A hairpin, then a zigzag with sharp corners, as a scribble makes.
+      var points = (0...60).map { CGPoint(x: 40 + CGFloat($0) * 3, y: 60) }
+      points += (0...60).map { CGPoint(x: 220 - CGFloat($0) * 3, y: 66) }
+      for i in 0...12 { points.append(CGPoint(x: 40 + CGFloat(i) * 16, y: i % 2 == 0 ? 150 : 230)) }
+      var dense: [CGPoint] = [points[0]]
+      for p in points.dropFirst() {
+        let last = dense[dense.count - 1]
+        let steps = max(1, Int(last.distance(to: p) / 2))
+        for k in 1...steps {
+          let t = CGFloat(k) / CGFloat(steps)
+          dense.append(CGPoint(x: last.x + (p.x - last.x) * t, y: last.y + (p.y - last.y) * t))
+        }
+      }
+      for brush in Element.Brush.allCases {
+        let gaps = try covered(dense, size: brush == .highlighter ? 24 : 10, brush: brush)
+        #expect(gaps.isEmpty, "\(brush) left holes at \(gaps.prefix(5))")
+      }
+    }
+
+    @Test func pixelsLandOnTheGridWithoutGaps() {
+      let line = Freehand.pixels([CGPoint(x: 0.2, y: 0.2), CGPoint(x: 5.7, y: 0.1), CGPoint(x: 5.9, y: 3.2)], size: 1)
+      #expect(line == (0...5).map { CGPoint(x: CGFloat($0) + 0.5, y: 0.5) } + (1...3).map { CGPoint(x: 5.5, y: CGFloat($0) + 0.5) })
+      let big = Freehand.pixels([CGPoint(x: 3, y: 3), CGPoint(x: 3.5, y: 3.9)], size: 4)
+      #expect(big == [CGPoint(x: 2, y: 2)])
+      let path = Freehand.outline(line, size: 1, brush: .pixel)
+      #expect(path.boundingBox == CGRect(x: 0, y: 0, width: 6, height: 4))
+    }
+
+    @Test func slowShakyStrokesHaveNoHoles() throws {
+      // A slow drag, as when zoomed in: tiny steps that wobble back and forth.
+      var seed: UInt64 = 3
+      func random() -> CGFloat {
+        seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return CGFloat(seed >> 11) / CGFloat(1 << 53) - 0.5
+      }
+      var raw: [CGPoint] = []
+      for i in 0..<600 {
+        let t = CGFloat(i) / 600 * .pi * 1.6
+        raw.append(CGPoint(x: 150 + cos(t) * 90 + random() * 3, y: 150 + sin(t) * 90 + random() * 3))
+      }
+      for brush in Element.Brush.allCases {
+        let size: CGFloat = brush == .highlighter ? 24 : 12
+        let (points, _) = Freehand.smoothed(raw)
+        let gaps = try covered(points, size: size, brush: brush)
+        #expect(gaps.isEmpty, "\(brush) left \(gaps.count) holes, at \(gaps.prefix(3))")
+      }
+    }
+  }
+
   @Suite struct Output {
     @Test func pngShowsWhatWasDrawn() throws {
       let image = try #require(Renderer.image(sampleScene()))

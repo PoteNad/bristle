@@ -77,6 +77,8 @@ public struct Element: Equatable, Sendable, Identifiable {
     case pen
     /// A broad, even, translucent line with square ends.
     case highlighter
+    /// Square pixels on a grid the size of the width, as a paint program's pencil draws them.
+    case pixel
   }
 
   public enum Arrowhead: String, CaseIterable, Sendable { case none, arrow, triangle, circle, bar }

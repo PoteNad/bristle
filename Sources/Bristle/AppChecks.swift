@@ -360,6 +360,8 @@
       }
     }
 
+    static func allViews(in view: NSView) -> [NSView] { [view] + view.subviews.flatMap(allViews) }
+
     static func allButtons(in view: NSView?) -> [NSButton] {
       guard let view else { return [] }
       return ((view as? NSButton).map { [$0] } ?? []) + view.subviews.flatMap(allButtons)
@@ -429,7 +431,7 @@
         }
         // Draw shows the brushes, widths, and color in the bar at the bottom, and they respond to clicks.
         editor.choose(.draw)
-        guard [.pencil, .pen, .highlighter].contains(canvas.tool), !editor.styleBar.bar.isHidden else {
+        guard Controls.brushes.contains(canvas.tool), !editor.styleBar.bar.isHidden else {
           fail("Draw should choose a brush and show the style bar")
         }
         press(barButton(editor.styleBar.bar, "Pencil"))
@@ -606,10 +608,31 @@
         }
         pass("the fill tool fills shapes and the eyedropper picks colors")
 
+        // The pixel brush paints squares on the pixel grid, and the style popover sets any width.
+        editor.choose(.draw)
+        press(barButton(editor.styleBar.bar, "Pixel"))
+        guard canvas.tool == .pixel else { fail("clicking Pixel should choose the pixel brush") }
+        let dot = CGPoint(x: c.x - 250.3, y: c.y + 260.6)
+        drag(line(from: dot, to: CGPoint(x: dot.x + 40, y: dot.y + 10)), in: canvas)
+        guard let pixels = canvas.scene.elements.last, pixels.brush == .pixel, pixels.points.count == 41,
+          pixels.worldPoints.allSatisfy({ $0.x - $0.x.rounded(.down) == 0.5 && $0.y - $0.y.rounded(.down) == 0.5 })
+        else { fail("the pixel brush should paint a gapless run of pixels, got \(String(describing: canvas.scene.elements.last?.points.count))") }
+        press(barButton(editor.styleBar.bar, "Style"))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        guard let style = editor.styleBar.popover, style.isShown,
+          let slider = style.contentViewController?.view.subviews.first.flatMap({ allViews(in: $0) })?.compactMap({ $0 as? NSSlider }).first
+        else { fail("the Style button should show a width slider") }
+        slider.doubleValue = 5
+        slider.sendAction(slider.action, to: slider.target)
+        guard canvas.style.strokeWidth == 5 else { fail("the width slider should set the pixel size, got \(canvas.style.strokeWidth)") }
+        style.close()
+        canvas.setStyle("Width") { $0.strokeWidth = 1 }
+        pass("the pixel brush paints on the pixel grid, and the style popover sets any width")
+
         // The frame: the bar's button adds one; it's picked by its label, moved, and removed.
         canvas.tool = .select
         canvas.select([])
-        press(barButton(editor.canvasBar.bar, "Add a frame"))
+        press(barButton(editor.canvasBar.bar, "Add Frame"))
         guard let frame = canvas.scene.frame else { fail("the frame button should add a frame") }
         editor.canvasBar.update()
         guard editor.canvasBar.frame.isOn else { fail("the frame button should show it's on") }
@@ -621,12 +644,21 @@
         editor.styleBar.update()
         guard !editor.styleBar.bar.isHidden else { fail("a picked frame should show its size in the bar") }
         _ = barButton(editor.styleBar.bar, "Frame Size")
+        // Choosing another tool lets go of the frame, so the bar shows that tool.
+        canvas.tool = .eraser
+        editor.styleBar.update()
+        guard !canvas.frameSelected,
+          editor.styleBar.bar.buttons.contains(where: { $0.toolTip == "Erase Objects" })
+        else { fail("choosing the eraser should let go of the frame and show the eraser's settings") }
+        canvas.tool = .select
+        click(canvas.frameLabelRect(canvas.scene.frame!).center, in: canvas)
+        guard canvas.frameSelected else { fail("clicking the frame's label should pick it again") }
         canvas.window?.makeFirstResponder(canvas)
         key("\u{7F}", code: 51)
         guard canvas.scene.frame == nil else { fail("Delete should remove a picked frame") }
         undo.undo()
         guard canvas.scene.frame != nil else { fail("undo should bring the frame back") }
-        press(barButton(editor.canvasBar.bar, "Remove the frame"))
+        press(barButton(editor.canvasBar.bar, "Remove Frame"))
         guard canvas.scene.frame == nil else { fail("the frame button should remove the frame") }
         pass("the frame is added from the bar, picked and moved by its label, and removed with Delete or the bar")
 
@@ -731,7 +763,38 @@
             target.canvas.addFrame(nil)
             target.canvas.zoomToFit(nil)
           }
+          if environment["BRISTLE_SELECT"] == "all" { target.canvas.selectAll(nil) }
+          if environment["BRISTLE_PIXELS"] == "1" {
+            // A small pixel drawing, zoomed in far enough to show the pixel grid.
+            let c = target.canvas
+            var art = Element(kind: .freehand)
+            art.brush = .pixel
+            art.strokeWidth = 1
+            art.stroke = Color(hex: "#FF3B30")
+            let heart = ["01100110", "11111111", "11111111", "01111110", "00111100", "00011000"]
+            var cells: [CGPoint] = []
+            for (y, row) in heart.enumerated() {
+              for (x, bit) in row.enumerated() where bit == "1" { cells.append(CGPoint(x: 1000.5 + CGFloat(x), y: 1000.5 + CGFloat(y))) }
+            }
+            art.setWorldPoints(cells)
+            c.drawing.edit("Pixels") { $0.elements.append(art) }
+            c.zoom(to: 16)
+            c.center(on: CGPoint(x: 1004, y: 1003))
+            c.tool = .pixel
+          }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
+          if environment["BRISTLE_TYPE"] == "1" {
+            target.canvas.tool = .text
+            target.canvas.acceptsFirstClick = true
+            click(middle(target.canvas), in: target.canvas)
+            if let typing = target.canvas.textEditor {
+              typing.insertText("Hello", replacementRange: typing.selectedRange())
+              target.canvas.displayIfNeeded()
+              print("layer", typing.visibleRect, typing.layer?.frame as Any, typing.wantsLayer, target.canvas.layer?.frame as Any, target.canvas.bounds, typing.frameRotation, typing.convert(typing.bounds, to: nil))
+              print("editor", typing.frame, typing.string, typing.superview === target.canvas, typing.isHidden, typing.textColor as Any, target.canvas.visibleRect, target.canvas.scene.elements.map { ($0.kind, $0.frame, $0.text) })
+            } else { print("no editor", target.canvas.scene.elements.count, target.canvas.tool) }
+            if let zoom = environment["BRISTLE_ZOOM"].flatMap(Double.init) { target.canvas.zoom(to: zoom) }
+          }
           if environment["BRISTLE_SELECT"] == "nothing" { target.canvas.select([]) }
           if let kind = environment["BRISTLE_SELECT"].flatMap(Element.Kind.init(rawValue:)),
             let element = target.canvas.scene.elements.first(where: { $0.kind == kind })

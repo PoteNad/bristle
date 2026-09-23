@@ -1,8 +1,8 @@
 import CoreGraphics
 
 /// Smooth ink for freehand strokes. Points are eased toward the pen, each gets a radius from
-/// pressure (or from speed with a mouse), and both sides are joined with round ends into a single
-/// filled shape, so a stroke draws, prints, and exports as one path.
+/// pressure (or from speed with a mouse), and the stroke is filled as one path, so it draws,
+/// prints, and exports the same.
 public enum Freehand {
   /// Pressures for a stroke drawn with a mouse, from its speed: moving quickly thins the line, as
   /// it would with a real pen. They are stored with the stroke so it keeps its shape when resized.
@@ -50,68 +50,124 @@ public enum Freehand {
     return (points, smoothedPressures)
   }
 
-  /// The filled outline of a stroke through already smoothed points.
+  /// The pixels a drag passes over: the centres of the squares of a grid `size` wide, joined
+  /// without gaps and each listed once, in the order they were reached.
+  public static func pixels(_ points: [CGPoint], size: CGFloat) -> [CGPoint] {
+    let size = max(1, size.rounded())
+    func cell(_ p: CGPoint) -> (Int, Int) { (Int((p.x / size).rounded(.down)), Int((p.y / size).rounded(.down))) }
+    var cells: [(Int, Int)] = []
+    var seen = Set<Int64>()
+    func add(_ c: (Int, Int)) {
+      let key = Int64(c.0) << 32 | Int64(UInt32(bitPattern: Int32(truncatingIfNeeded: c.1)))
+      if seen.insert(key).inserted { cells.append(c) }
+    }
+    var last: (Int, Int)?
+    for point in points {
+      let c = cell(point)
+      if let (x0, y0) = last {
+        // A line of cells from the last one, so a quick drag leaves no gaps.
+        let dx = abs(c.0 - x0), dy = -abs(c.1 - y0), sx = x0 < c.0 ? 1 : -1, sy = y0 < c.1 ? 1 : -1
+        var x = x0, y = y0, error = dx + dy
+        while true {
+          add((x, y))
+          if x == c.0 && y == c.1 { break }
+          let e2 = 2 * error
+          if e2 >= dy { error += dy; x += sx }
+          if e2 <= dx { error += dx; y += sy }
+        }
+      } else {
+        add(c)
+      }
+      last = c
+    }
+    return cells.map { CGPoint(x: (CGFloat($0.0) + 0.5) * size, y: (CGFloat($0.1) + 0.5) * size) }
+  }
+
+  /// The filled shape of a stroke through already smoothed points: a piece for each step
+  /// between points, joined at every point and capped at the ends, all turning the same way so
+  /// they fill as one shape. A single outline around the whole stroke folds over itself where
+  /// the stroke turns sharply or doubles back, and leaves holes in the ink there.
   public static func outline(
     _ points: [CGPoint], pressures: [CGFloat] = [], size: CGFloat, brush: Element.Brush = .pen
   ) -> CGPath {
     let path = CGMutablePath()
     guard let first = points.first else { return path }
-    let size = max(size, 0.5)
-    let r = radii(points, pressures: pressures, size: size, brush: brush)
-    let extent = CGRect(boundingPoints: points)
-    if points.count < 2 || extent.width + extent.height < 0.5 {
-      let radius = max(r.max() ?? size / 2, size * 0.3)
-      if brush == .highlighter {
-        path.addRect(CGRect(x: first.x - radius, y: first.y - radius, width: radius * 2, height: radius * 2))
-      } else {
-        path.addEllipse(in: CGRect(x: first.x - radius, y: first.y - radius, width: radius * 2, height: radius * 2))
-      }
+    if brush == .pixel {
+      let side = max(1, size.rounded())
+      for p in points { path.addRect(CGRect(x: p.x - side / 2, y: p.y - side / 2, width: side, height: side)) }
       return path
     }
-    var left: [CGPoint] = [], right: [CGPoint] = [], normals: [CGPoint] = []
-    left.reserveCapacity(points.count)
-    right.reserveCapacity(points.count)
-    for i in points.indices {
-      let a = points[max(0, i - 1)], b = points[min(points.count - 1, i + 1)]
-      var tx = b.x - a.x, ty = b.y - a.y
-      let length = hypot(tx, ty)
-      if length < 0.0001 {
-        let previous = normals.last ?? CGPoint(x: 0, y: 1)
-        tx = previous.y
-        ty = -previous.x
-      } else {
-        tx /= length
-        ty /= length
+    let size = max(size, 0.5)
+    let radii = radii(points, pressures: pressures, size: size, brush: brush)
+    // Points closer together than this add nothing but noise to the edges.
+    let step = size * 0.02
+    var p: [CGPoint] = [], r: [CGFloat] = []
+    p.reserveCapacity(points.count)
+    r.reserveCapacity(points.count)
+    for (point, radius) in zip(points, radii) {
+      if let last = p.last, last.distance(to: point) < step { continue }
+      p.append(point)
+      r.append(radius)
+    }
+    let round = brush != .highlighter
+    guard p.count > 1 else {
+      let radius = max(radii.max() ?? size / 2, size * 0.3)
+      let dot = CGRect(x: first.x - radius, y: first.y - radius, width: radius * 2, height: radius * 2)
+      if round { path.addEllipse(in: dot) } else { path.addRect(dot) }
+      return path
+    }
+
+    // Every piece is added turning the same way, so where they overlap they fill as one.
+    func polygon(_ corners: [CGPoint]) {
+      var area: CGFloat = 0
+      for i in corners.indices {
+        let a = corners[i], b = corners[(i + 1) % corners.count]
+        area += a.x * b.y - b.x * a.y
       }
-      let n = CGPoint(x: -ty, y: tx)
+      guard abs(area) > 1e-9 else { return }
+      path.addLines(between: area > 0 ? corners : corners.reversed())
+      path.closeSubpath()
+    }
+    func circle(_ center: CGPoint, _ radius: CGFloat) {
+      path.move(to: CGPoint(x: center.x + radius, y: center.y))
+      path.addArc(center: center, radius: radius, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+      path.closeSubpath()
+    }
+
+    var normals: [CGPoint] = []
+    normals.reserveCapacity(p.count - 1)
+    for i in 0..<(p.count - 1) {
+      let dx = p[i + 1].x - p[i].x, dy = p[i + 1].y - p[i].y
+      let length = max(hypot(dx, dy), 1e-9)
+      let n = CGPoint(x: -dy / length, y: dx / length)
       normals.append(n)
-      left.append(CGPoint(x: points[i].x + n.x * r[i], y: points[i].y + n.y * r[i]))
-      right.append(CGPoint(x: points[i].x - n.x * r[i], y: points[i].y - n.y * r[i]))
+      polygon([
+        CGPoint(x: p[i].x + n.x * r[i], y: p[i].y + n.y * r[i]),
+        CGPoint(x: p[i + 1].x + n.x * r[i + 1], y: p[i + 1].y + n.y * r[i + 1]),
+        CGPoint(x: p[i + 1].x - n.x * r[i + 1], y: p[i + 1].y - n.y * r[i + 1]),
+        CGPoint(x: p[i].x - n.x * r[i], y: p[i].y - n.y * r[i]),
+      ])
     }
-    func side(_ side: [CGPoint]) {
-      for i in 1..<side.count - 1 {
-        let mid = CGPoint(x: (side[i].x + side[i + 1].x) / 2, y: (side[i].y + side[i + 1].y) / 2)
-        path.addQuadCurve(to: mid, control: side[i])
+    // Joins: the gap on the outside of a gentle turn is filled with a sliver, and a sharp turn
+    // gets a round join.
+    for i in 1..<(p.count - 1) {
+      let a = normals[i - 1], b = normals[i]
+      let turn = atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y)
+      if abs(turn) < 1e-4 { continue }
+      if abs(turn) > 0.3 {
+        circle(p[i], r[i])
+      } else {
+        let side: CGFloat = turn > 0 ? -1 : 1
+        polygon([
+          p[i], CGPoint(x: p[i].x + a.x * r[i] * side, y: p[i].y + a.y * r[i] * side),
+          CGPoint(x: p[i].x + b.x * r[i] * side, y: p[i].y + b.y * r[i] * side),
+        ])
       }
-      path.addLine(to: side[side.count - 1])
     }
-    let end = points.count - 1
-    path.move(to: left[0])
-    side(left)
-    if brush == .highlighter {
-      path.addLine(to: right[end])
-    } else {
-      let angle = atan2(normals[end].y, normals[end].x)
-      path.addArc(center: points[end], radius: r[end], startAngle: angle, endAngle: angle + .pi, clockwise: true)
+    if round {
+      circle(p[0], r[0])
+      circle(p[p.count - 1], r[r.count - 1])
     }
-    side(right.reversed())
-    if brush == .highlighter {
-      path.addLine(to: left[0])
-    } else {
-      let angle = atan2(normals[0].y, normals[0].x)
-      path.addArc(center: points[0], radius: r[0], startAngle: angle + .pi, endAngle: angle, clockwise: true)
-    }
-    path.closeSubpath()
     return path
   }
 

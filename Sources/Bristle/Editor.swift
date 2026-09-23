@@ -162,7 +162,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   // MARK: Canvas events
 
   func canvasViewToolDidChange(_ canvas: CanvasView) {
-    if [.pencil, .pen, .highlighter].contains(canvas.tool) { lastBrush = canvas.tool }
+    if Controls.brushes.contains(canvas.tool) { lastBrush = canvas.tool }
     updateBars()
   }
 
@@ -337,7 +337,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   var currentSlot: Slot? {
     switch canvas.tool {
     case .select: .select
-    case .pencil, .pen, .highlighter: .draw
+    case .pencil, .pen, .highlighter, .pixel: .draw
     case .eraser, .strokeEraser: .eraser
     case .fill: .fill
     case .rectangle: .rectangle
@@ -480,7 +480,6 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     let current = canvas.scene.frame?.size ?? canvas.scene.exportArea?.size ?? FrameSize.standard.size
     let alert = NSAlert()
     alert.messageText = canvas.scene.frame == nil ? "Add a Frame" : "Frame Size"
-    alert.informativeText = "The frame is the part of the canvas that’s exported and printed. The drawing stays where it is."
     alert.addButton(withTitle: canvas.scene.frame == nil ? "Add Frame" : "Change")
     alert.addButton(withTitle: "Cancel")
     let number = NumberFormatter()

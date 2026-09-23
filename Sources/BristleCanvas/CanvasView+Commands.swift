@@ -143,8 +143,8 @@ extension CanvasView: NSMenuItemValidation {
     switch tool {
     case .select: return .arrow
     case .text: return .iBeam
-    case .pencil, .pen, .highlighter, .eraser, .strokeEraser:
-      return brushCursor(diameter: (style.strokeWidth) * magnification, square: tool == .highlighter)
+    case .pencil, .pen, .highlighter, .pixel, .eraser, .strokeEraser:
+      return brushCursor(diameter: (style.strokeWidth) * magnification, square: tool == .highlighter || tool == .pixel)
     case .eyedropper: return symbolCursor("eyedropper", hotSpot: CGPoint(x: 1, y: 15))
     case .fill: return symbolCursor("drop", hotSpot: CGPoint(x: 8, y: 15))
     default: return .crosshair
@@ -195,7 +195,9 @@ extension CanvasView: NSMenuItemValidation {
 
   // MARK: Fill and eyedropper
 
-  /// Fills the shape under the pointer with the fill tool's colour, or the paper if there's none.
+  /// Fills the shape under the pointer with the fill tool's colour, or the frame's background
+  /// when the pointer is inside the frame, as MS Paint fills its page. The endless canvas
+  /// outside a frame isn't filled.
   func fill(at p: CGPoint, clear: Bool) {
     let color = clear ? nil : (styles[.fill]?.stroke ?? .ink)
     let tolerance = 3 / magnification
@@ -216,8 +218,7 @@ extension CanvasView: NSMenuItemValidation {
         }
         scene[target.id] = e
       }
-    } else {
-      // Filling empty canvas colors the whole canvas, as MS Paint fills its page.
+    } else if let frame = scene.frame, frame.contains(p) {
       drawing.edit(clear ? "Clear Background" : "Fill Background") { $0.paper.background = color }
     }
   }
@@ -381,7 +382,8 @@ extension CanvasView: NSMenuItemValidation {
     drawing.edit("Add Frame") { scene in
       if scene.contentBounds.isNull { scene.crop(to: fallback) } else { scene.fitFrameToDrawing() }
     }
-    frameSelected = true
+    // Picked only with Select, so another tool's settings stay in the bar.
+    if tool == .select { frameSelected = true }
   }
 
   @objc public func removeFrame(_ sender: Any?) {

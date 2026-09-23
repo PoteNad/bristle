@@ -120,7 +120,9 @@ final class Controls {
     return NSFont(descriptor: descriptor, size: 24)?.fontName ?? ""
   }()
   static let sizes: [(String, CGFloat)] = [("S", 16), ("M", 24), ("L", 36), ("XL", 56)]
-  static let brushes: [Tool] = [.pencil, .pen, .highlighter]
+  /// Every text size the size menu offers.
+  static let pointSizes: [CGFloat] = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 56, 64, 72, 96, 128]
+  static let brushes: [Tool] = [.pencil, .pen, .highlighter, .pixel]
 
   weak var canvas: CanvasView?
   private var targets: [ClosureTarget] = []
@@ -155,7 +157,7 @@ final class Controls {
     guard let canvas else { return [] }
     if !elements.isEmpty { return Set(elements.map(\.kind)) }
     switch canvas.tool {
-    case .pencil, .pen, .highlighter: return [.freehand]
+    case .pencil, .pen, .highlighter, .pixel: return [.freehand]
     case .line: return [.line]
     case .arrow: return [.arrow]
     case .rectangle: return [.rectangle]
@@ -186,6 +188,7 @@ final class Controls {
     switch elements.first?.brush {
     case .pencil: .pencil
     case .highlighter: .highlighter
+    case .pixel: .pixel
     default: .pen
     }
   }
@@ -203,6 +206,7 @@ final class Controls {
     case .pencil: [1.5, 3, 6]
     case .pen: [4, 8, 16]
     case .highlighter: [14, 24, 40]
+    case .pixel: [1, 2, 4]
     case .eraser, .strokeEraser: [10, 24, 48]
     default: [2, 4, 8]
     }
@@ -218,25 +222,82 @@ final class Controls {
   }
 
   func setWidth(_ i: Int) {
-    guard let canvas else { return }
-    let tool = widthTool
-    let widths = Self.widths(for: tool)
+    let widths = Self.widths(for: widthTool)
     guard widths.indices.contains(i) else { return }
-    if tool == .eraser {
-      canvas.styles[.eraser, default: Tool.eraser.defaultStyle].strokeWidth = widths[i]
-      canvas.styles[.strokeEraser, default: Tool.strokeEraser.defaultStyle].strokeWidth = widths[i]
+    setWidth(value: widths[i])
+  }
+
+  /// The width now, of the eraser or of what's styled.
+  var width: CGFloat {
+    guard let canvas else { return 3 }
+    return widthTool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style.strokeWidth
+  }
+
+  /// The widths the slider offers for the tool.
+  static func widthRange(for tool: Tool) -> ClosedRange<CGFloat> {
+    switch tool {
+    case .pixel: 1...16
+    case .eraser, .strokeEraser: 4...120
+    case .highlighter: 4...80
+    default: 0.5...48
+    }
+  }
+
+  func setWidth(value: CGFloat, coalescing: Bool = false) {
+    guard let canvas else { return }
+    let value = widthTool == .pixel ? value.rounded() : (value * 2).rounded() / 2
+    if widthTool == .eraser {
+      canvas.styles[.eraser, default: Tool.eraser.defaultStyle].strokeWidth = value
+      canvas.styles[.strokeEraser, default: Tool.strokeEraser.defaultStyle].strokeWidth = value
       canvas.delegate?.canvasViewStylesDidChange(canvas)
       canvas.window?.invalidateCursorRects(for: canvas)
     } else {
-      canvas.setStyle("Change Width") { $0.strokeWidth = widths[i] }
+      canvas.setStyle("Change Width", coalescing: coalescing) { $0.strokeWidth = value }
     }
+  }
+
+  /// A slider for any width, with the width beside it.
+  func widthSlider() -> NSView {
+    let range = Self.widthRange(for: widthTool)
+    let slider = NSSlider(value: Double(width), minValue: Double(range.lowerBound), maxValue: Double(range.upperBound), target: nil, action: nil)
+    slider.isContinuous = true
+    slider.controlSize = .small
+    slider.setAccessibilityLabel("Width")
+    let label = NSTextField(labelWithString: "")
+    label.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    label.textColor = .secondaryLabelColor
+    label.alignment = .right
+    label.widthAnchor.constraint(equalToConstant: 34).isActive = true
+    wire(slider) { [weak self, weak slider] _ in
+      guard let self, let slider else { return }
+      self.setWidth(value: CGFloat(slider.doubleValue), coalescing: true)
+    }
+    refreshers.append { [weak self, weak slider, weak label] in
+      guard let self else { return }
+      slider?.doubleValue = Double(self.width)
+      let width = self.width
+      label?.stringValue = width == width.rounded() ? "\(Int(width)) pt" : String(format: "%.1f pt", width)
+    }
+    let row = NSStackView(views: [slider, label])
+    row.spacing = 8
+    return row
   }
 
   func setBrush(_ brush: Element.Brush) {
     guard let canvas else { return }
     let ids = Set(elements.filter { $0.kind == .freehand }.map(\.id))
     canvas.drawing.edit("Change Brush") { scene in
-      for i in scene.elements.indices where ids.contains(scene.elements[i].id) { scene.elements[i].brush = brush }
+      for i in scene.elements.indices where ids.contains(scene.elements[i].id) {
+        var e = scene.elements[i]
+        // Strokes made into pixels land on the pixel grid.
+        if brush == .pixel && e.brush != .pixel {
+          e.strokeWidth = max(1, min(8, (e.strokeWidth / 3).rounded()))
+          e.setWorldPoints(Freehand.pixels(e.points.map { CGPoint(x: $0.x + e.x, y: $0.y + e.y) }, size: e.strokeWidth))
+          e.pressures = []
+        }
+        e.brush = brush
+        scene.elements[i] = e
+      }
     }
   }
 

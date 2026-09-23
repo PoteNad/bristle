@@ -174,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       item.representedObject = tool.rawValue
       item.image = NSImage(systemSymbolName: tool.symbol, accessibilityDescription: nil)
       item.toolTip = tool.key.isEmpty ? nil : "Press \(tool.key.uppercased()) on the canvas"
-      if [.select, .highlighter, .strokeEraser, .arrow, .polygon, .text, .fill].contains(tool) { tools.addItem(.separator()) }
+      if [.select, .pixel, .strokeEraser, .arrow, .polygon, .text, .fill].contains(tool) { tools.addItem(.separator()) }
     }
     view.addItem(.separator())
     add(view, "Zoom In", #selector(CanvasView.zoomIn(_:)), "+")

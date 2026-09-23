@@ -54,7 +54,7 @@ extension CanvasView {
     let tool = tabletEraser ? Tool.eraser : self.tool
     switch tool {
     case .select: selectDown(p, event)
-    case .pencil, .pen, .highlighter:
+    case .pencil, .pen, .highlighter, .pixel:
       let tablet = event.subtype == .tabletPoint
       interaction = .freehand(
         points: [p], pressures: [tablet ? CGFloat(event.pressure) : 1], tablet: tablet,
@@ -608,6 +608,15 @@ extension CanvasView {
   func finishStroke(_ raw: [CGPoint], pressures rawPressures: [CGFloat], tablet: Bool) {
     guard let brush = tool.brush ?? (tabletEraser ? nil : .pen), !raw.isEmpty else { return }
     let width = style.strokeWidth
+    if brush == .pixel {
+      var stroke = Element(kind: .freehand)
+      style.apply(to: &stroke)
+      stroke.brush = .pixel
+      stroke.setWorldPoints(Freehand.pixels(raw, size: width))
+      setNeedsDisplay(stroke.bounds.insetBy(dx: -width * 2, dy: -width * 2))
+      drawing.edit("Draw") { $0.elements.append(stroke) }
+      return
+    }
     var pressures = tablet ? rawPressures : []
     if brush == .pen && !tablet { pressures = Freehand.simulatedPressures(raw, size: width) }
     let (smooth, smoothPressures) = Freehand.smoothed(raw, pressures: pressures)
@@ -711,10 +720,11 @@ extension CanvasView {
       let width = style.strokeWidth
       var pressures = tablet ? rawPressures : []
       if brush == .pen && !tablet { pressures = Freehand.simulatedPressures(raw, size: width) }
-      let (points, smoothPressures) = Freehand.smoothed(raw, pressures: pressures)
+      let (points, smoothPressures) = brush == .pixel ? (Freehand.pixels(raw, size: width), []) : Freehand.smoothed(raw, pressures: pressures)
       context.saveGState()
+      if brush == .pixel { context.setShouldAntialias(false) }
       context.setAlpha(style.opacity)
-      context.setFillColor((style.stroke ?? .ink).cgColor)
+      context.setFillColor(shown(style.stroke ?? .ink).cgColor)
       context.addPath(Freehand.outline(points, pressures: smoothPressures, size: width, brush: brush))
       context.fillPath(using: .winding)
       context.restoreGState()
