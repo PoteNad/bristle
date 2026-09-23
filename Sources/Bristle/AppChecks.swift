@@ -27,6 +27,19 @@
     /// own bundle identifier, and keeps AppKit's restoration on.
     nonisolated static var restoresState: Bool { environment["BRISTLE_SESSION_VERIFY"] != nil }
 
+    /// The session check runs in a copy of the app with an identifier of its own; afterwards it
+    /// removes that copy's saved windows and settings, which only the app itself may delete, and
+    /// any left by earlier runs.
+    static func removeCheckState() {
+      guard let id = Bundle.main.bundleIdentifier, id.hasPrefix("io.github.PoteNad.bristle.checks") else { return }
+      let states = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Saved Application State")
+      for name in (try? FileManager.default.contentsOfDirectory(atPath: states.path)) ?? []
+      where name.hasPrefix("io.github.PoteNad.bristle.checks") {
+        try? FileManager.default.removeItem(at: states.appendingPathComponent(name))
+      }
+      UserDefaults.standard.removePersistentDomain(forName: id)
+    }
+
     /// Discards every open document so no draft is left behind, then quits.
     static func finish() -> Never {
       for document in NSDocumentController.shared.documents {
@@ -370,6 +383,7 @@
           fail("the unsaved drawing should come back after quitting, found \(documents.map { $0.drawing.scene.elements.map(\.kind) })")
         }
         pass("an unsaved drawing is kept when quitting and comes back on the next launch")
+        removeCheckState()
         finish()
       }
     }

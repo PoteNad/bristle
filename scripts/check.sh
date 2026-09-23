@@ -38,18 +38,14 @@ BRISTLE_CLICK_CHECK=1 "$APP" $IGNORE_STATE
 # shellcheck disable=SC2086
 BRISTLE_PERF_CHECK=1 "$APP" $IGNORE_STATE
 
-# Restoring after quitting runs in a copy of the app with its own identifier, so it never
-# touches your own windows and drafts.
+# Restoring after quitting runs in a copy of the app with an identifier of its own for this run,
+# so it never touches your windows and drafts, and never finds state from an earlier run.
 SESSION_APP="$ROOT/Bristle Checks.app"
 cp -R build/Bristle.app "$SESSION_APP"
-plutil -replace CFBundleIdentifier -string io.github.PoteNad.bristle.checks "$SESSION_APP/Contents/Info.plist"
+plutil -replace CFBundleIdentifier -string "io.github.PoteNad.bristle.checks.$$" "$SESSION_APP/Contents/Info.plist"
 codesign --force --sign - "$SESSION_APP" 2>/dev/null
-SESSION_STATE="$HOME/Library/Saved Application State/io.github.PoteNad.bristle.checks.savedState"
-rm -rf "$SESSION_STATE"
 BRISTLE_SESSION_PREPARE=1 "$SESSION_APP/Contents/MacOS/Bristle" -NSQuitAlwaysKeepsWindows YES -returnsToSelect NO
 BRISTLE_SESSION_VERIFY=1 "$SESSION_APP/Contents/MacOS/Bristle" -NSQuitAlwaysKeepsWindows YES -returnsToSelect NO
-rm -rf "$SESSION_STATE"
-defaults delete io.github.PoteNad.bristle.checks >/dev/null 2>&1 || true
 
 ./scripts/build.sh
 printf 'All checks passed.\n'
