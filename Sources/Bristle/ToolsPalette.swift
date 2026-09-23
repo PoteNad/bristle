@@ -142,8 +142,9 @@ final class ToolsPalette: NSView {
       button.setAccessibilityHelp(
         group.tools.count > 1 ? "Click again to choose another \(group.name.lowercased()) tool." : nil)
     }
-    let stored = variants.mapValues(\.rawValue)
-    UserDefaults.standard.set(stored, forKey: PreferenceKey.toolVariants)
+    if !AppPreferences.isAutomatedCheck {
+      UserDefaults.standard.set(variants.mapValues(\.rawValue), forKey: PreferenceKey.toolVariants)
+    }
     if let expandedGroup { refreshQuickSettings(Self.groups[expandedGroup]) }
   }
 

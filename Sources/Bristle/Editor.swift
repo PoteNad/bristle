@@ -109,13 +109,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   func windowDidUpdate(_ notification: Notification) { showPaperOnce() }
 
   /// Automated checks must leave the user's saved window and sidebar state alone.
-  var isAutomatedCheck: Bool {
-    #if BRISTLE_CHECKS
-      AppChecks.isChecking
-    #else
-      false
-    #endif
-  }
+  var isAutomatedCheck: Bool { AppPreferences.isAutomatedCheck }
 
   // MARK: Window size
 
@@ -313,6 +307,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   @objc func toggleGuides(_ sender: Any?) { flip(PreferenceKey.snapsToGuides) }
 
   private func flip(_ key: String) {
+    guard !isAutomatedCheck else { return }
     UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: key), forKey: key)
     NotificationCenter.default.post(name: .canvasDefaultsDidChange, object: nil)
   }

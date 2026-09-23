@@ -14,7 +14,8 @@ else
 fi
 
 APP="build/Bristle.app/Contents/MacOS/Bristle"
-IGNORE_STATE="-ApplePersistenceIgnoreState YES"
+# The checks use the default settings, whatever yours are.
+IGNORE_STATE="-ApplePersistenceIgnoreState YES -returnsToSelect NO -snapsToGrid NO -showsGrid NO -paperSize standard -transparentBackground NO"
 ROOT="$(mktemp -d)"
 trap 'rm -rf "$ROOT"' EXIT
 
@@ -45,8 +46,8 @@ plutil -replace CFBundleIdentifier -string io.github.PoteNad.bristle.checks "$SE
 codesign --force --sign - "$SESSION_APP" 2>/dev/null
 SESSION_STATE="$HOME/Library/Saved Application State/io.github.PoteNad.bristle.checks.savedState"
 rm -rf "$SESSION_STATE"
-BRISTLE_SESSION_PREPARE=1 "$SESSION_APP/Contents/MacOS/Bristle" -NSQuitAlwaysKeepsWindows YES
-BRISTLE_SESSION_VERIFY=1 "$SESSION_APP/Contents/MacOS/Bristle" -NSQuitAlwaysKeepsWindows YES
+BRISTLE_SESSION_PREPARE=1 "$SESSION_APP/Contents/MacOS/Bristle" -NSQuitAlwaysKeepsWindows YES -returnsToSelect NO
+BRISTLE_SESSION_VERIFY=1 "$SESSION_APP/Contents/MacOS/Bristle" -NSQuitAlwaysKeepsWindows YES -returnsToSelect NO
 rm -rf "$SESSION_STATE"
 defaults delete io.github.PoteNad.bristle.checks >/dev/null 2>&1 || true
 

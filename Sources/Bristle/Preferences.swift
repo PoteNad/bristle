@@ -73,6 +73,15 @@ extension Notification.Name {
 }
 
 enum AppPreferences {
+  /// Automated checks must leave the user's settings, windows, and tool styles alone.
+  static var isAutomatedCheck: Bool {
+    #if BRISTLE_CHECKS
+      AppChecks.isChecking
+    #else
+      false
+    #endif
+  }
+
   static let settingKeys = [
     PreferenceKey.appearance, PreferenceKey.paperSize, PreferenceKey.transparentBackground,
     PreferenceKey.snapsToGuides, PreferenceKey.gridSpacing, PreferenceKey.returnsToSelect,
@@ -130,6 +139,7 @@ enum AppPreferences {
   static var toolStyles: [Tool: Style] {
     get {
       var styles = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0, $0.defaultStyle) })
+      guard !isAutomatedCheck else { return styles }
       let stored = UserDefaults.standard.dictionary(forKey: PreferenceKey.toolStyles) as? [String: String] ?? [:]
       for (name, json) in stored {
         if let tool = Tool(rawValue: name), let style = Style(json: json) { styles[tool] = style }
@@ -137,6 +147,7 @@ enum AppPreferences {
       return styles
     }
     set {
+      guard !isAutomatedCheck else { return }
       let stored = Dictionary(uniqueKeysWithValues: newValue.filter { $0.value != $0.key.defaultStyle }.map { ($0.key.rawValue, $0.value.json) })
       UserDefaults.standard.set(stored, forKey: PreferenceKey.toolStyles)
     }

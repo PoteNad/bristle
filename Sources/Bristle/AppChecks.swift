@@ -7,7 +7,7 @@
   /// End-to-end checks driven by environment variables, used by scripts/check.sh.
   @MainActor
   enum AppChecks {
-    static let environment = ProcessInfo.processInfo.environment
+    nonisolated static let environment = ProcessInfo.processInfo.environment
 
     static func fail(_ message: String) -> Never {
       fputs("Check failed: \(message)\n", stderr)
@@ -15,7 +15,7 @@
     }
 
     /// Whether this launch is an automated check, which must not touch the user's drafts.
-    static var isChecking: Bool {
+    nonisolated static var isChecking: Bool {
       [
         "BRISTLE_LAUNCH_CHECK", "BRISTLE_SAVE_CHECK", "BRISTLE_OPEN_CHECK", "BRISTLE_ROUNDTRIP_CHECK",
         "BRISTLE_STALE_CHECK", "BRISTLE_SESSION_PREPARE", "BRISTLE_SESSION_VERIFY", "BRISTLE_CLICK_CHECK",
@@ -25,7 +25,7 @@
 
     /// The session check restores windows and drafts, so it runs in a copy of the app with its
     /// own bundle identifier, and keeps AppKit's restoration on.
-    static var restoresState: Bool { environment["BRISTLE_SESSION_VERIFY"] != nil }
+    nonisolated static var restoresState: Bool { environment["BRISTLE_SESSION_VERIFY"] != nil }
 
     /// Discards every open document so no draft is left behind, then quits.
     static func finish() -> Never {
@@ -602,6 +602,15 @@
           let target = (controller.documents.last as? BristleDocument)?.editor ?? editor
           if environment["BRISTLE_DEMO"] == "1" { demo(target.canvas) }
           if let tool = environment["BRISTLE_TOOL"].flatMap(Tool.init(rawValue:)) { target.canvas.tool = tool }
+          if environment["BRISTLE_SCENARIO"] == "edit" {
+            // A turned shape selected beside text being typed and an image being cropped.
+            let c = target.canvas
+            let shape = c.scene.elements.first { $0.kind == .rectangle }!
+            c.drawing.edit("Rotate") { $0.rotate([shape.id], by: 0.35) }
+            c.select([shape.id])
+            let text = c.scene.elements.first { $0.kind == .text }!
+            c.beginTextEditing(text.id)
+          }
           if environment["BRISTLE_EXPAND"] == "1" { target.tools.expand(1) }
           _ = canvas
           after(1) {
