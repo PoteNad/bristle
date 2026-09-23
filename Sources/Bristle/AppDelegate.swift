@@ -15,9 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    // The system colour panel is Bristle's Palette.
-    NSColorPanel.shared.title = "Palette"
-    NSColorPanel.shared.showsAlpha = true
     #if BRISTLE_CHECKS
       // Automated checks run in the background so they never take keyboard focus from the user.
       if AppChecks.isChecking { return }
@@ -173,8 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       item.toolTip = tool.key.isEmpty ? nil : "Press \(tool.key.uppercased()) on the canvas"
       if [.select, .highlighter, .strokeEraser, .arrow, .polygon, .text, .fill].contains(tool) { tools.addItem(.separator()) }
     }
-    add(view, "Hide Tools", #selector(Editor.toggleTools(_:)))
-    add(view, "Show Inspector", #selector(Editor.toggleInspector(_:)), "i", modifiers: [.command, .option])
+    add(view, "Draw", #selector(Editor.toggleDraw(_:)))
     view.addItem(.separator())
     add(view, "Zoom In", #selector(CanvasView.zoomIn(_:)), "+")
     add(view, "Zoom Out", #selector(CanvasView.zoomOut(_:)), "-")

@@ -11,12 +11,8 @@ enum PreferenceKey {
   static let snapsToGrid = "snapsToGrid"
   static let gridSpacing = "gridSpacing"
   static let returnsToSelect = "returnsToSelect"
-  static let inspectorVisible = "inspectorVisible"
-  static let toolsVisible = "toolsVisible"
   /// Each tool's style, as JSON by tool name.
   static let toolStyles = "toolStyles"
-  /// The last tool chosen in each group of the Tools column.
-  static let toolVariants = "toolVariants"
   /// The content size of the window the user last resized, which new windows open at.
   static let windowSize = "windowSize"
 }
@@ -97,8 +93,6 @@ enum AppPreferences {
       PreferenceKey.snapsToGrid: false,
       PreferenceKey.gridSpacing: 20,
       PreferenceKey.returnsToSelect: false,
-      PreferenceKey.inspectorVisible: true,
-      PreferenceKey.toolsVisible: true,
     ])
   }
 

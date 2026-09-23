@@ -9,6 +9,8 @@ public protocol CanvasViewDelegate: AnyObject {
   func canvasView(_ canvas: CanvasView, didPick color: Color)
   /// The style of the current tool changed on the canvas, such as by the Palette.
   func canvasViewStylesDidChange(_ canvas: CanvasView)
+  /// The pointer was released after drawing, moving, or changing something.
+  func canvasViewDidFinishInteraction(_ canvas: CanvasView)
 }
 
 extension CanvasViewDelegate {
@@ -16,6 +18,7 @@ extension CanvasViewDelegate {
   public func canvasViewZoomDidChange(_ canvas: CanvasView) {}
   public func canvasView(_ canvas: CanvasView, didPick color: Color) {}
   public func canvasViewStylesDidChange(_ canvas: CanvasView) {}
+  public func canvasViewDidFinishInteraction(_ canvas: CanvasView) {}
 }
 
 /// Options that change how the canvas behaves, but never the drawing.
@@ -137,6 +140,11 @@ public final class CanvasView: NSView {
   public override var wantsUpdateLayer: Bool { false }
 
   public var scene: Scene { drawing.scene }
+  /// Whether the pointer is drawing, moving, or changing something right now.
+  public var isInteracting: Bool {
+    if case .none = interaction { return false }
+    return true
+  }
   public var magnification: CGFloat { scrollView.magnification }
 
   // MARK: Size

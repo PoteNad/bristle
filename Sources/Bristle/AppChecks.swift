@@ -169,15 +169,18 @@
         let editor = document.editor!
         guard windows[0].firstResponder === editor.canvas else { fail("the canvas should have keyboard focus") }
         guard !document.isDocumentEdited else { fail("a blank drawing shouldn't ask to be saved") }
-        guard NSColorPanel.shared.title == "Palette" else { fail("the color panel should be called the Palette") }
         let menus = NSApp.mainMenu!.items.compactMap(\.submenu?.title)
         guard menus == ["Bristle", "File", "Edit", "Format", "Arrange", "Canvas", "View", "Window", "Help"] else {
           fail("unexpected menus \(menus)")
         }
         let toolbar = windows[0].toolbar?.items.map(\.itemIdentifier.rawValue) ?? []
-        guard toolbar == ["NSToolbarFlexibleSpaceItem", "zoom", "share", "inspector"] else {
-          fail("the toolbar should hold only zoom, share and the inspector: \(toolbar)")
-        }
+        guard toolbar == ["NSToolbarFlexibleSpaceItem", "tools", "NSToolbarFlexibleSpaceItem", "share"],
+          editor.toolGroup?.subitems.map(\.label) == ["Select", "Draw", "Shapes", "Text", "Image"],
+          editor.currentSlot == .select
+        else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
+        guard editor.drawBar.bar.isHidden, !editor.zoomBar.bar.isHidden, !editor.canvasBar.bar.isHidden,
+          editor.formatBar.bar.isHidden
+        else { fail("only the zoom and canvas bars should show in a new window") }
         controller.newWindowForTab(nil)
         after(1) {
           guard controller.documents.count == 2, windows[0].tabbedWindows?.count == 2 else {
@@ -186,7 +189,7 @@
           (windows[0].tabGroup?.selectedWindow ?? NSApp.keyWindow)?.performClose(nil)
           after(0.5) {
             guard controller.documents.count == 1 else { fail("closing a tab should close only that tab") }
-            pass("one window opens with the canvas focused, the Palette, the menus and a minimal toolbar, and tabs open and close")
+            pass("one window opens with the canvas focused, the menus, the tools in the toolbar, and tabs open and close")
             finish()
           }
         }
@@ -377,30 +380,29 @@
         let document = firstDocument(controller)
         let editor = document.editor!
         let canvas = editor.canvas
-        let tools = editor.tools
         let undo = document.undoManager!
         let c = canvas.scene.paperRect.center
 
-        // The Tools column: a click picks a tool, a second click opens its group, and picking a
-        // variant closes it again.
-        @MainActor func toolButton(_ group: String) -> NSButton {
-          guard let index = ToolsPalette.groups.firstIndex(where: { $0.name == group }) else { fail("no \(group) group") }
-          let buttons = allButtons(in: tools).filter { $0.action == Selector(("pressGroup:")) }
-          return buttons[index]
+        // Draw in the toolbar shows the drawing bar with the last drawing tool; choosing a tool
+        // from its menu uses it, and Draw again goes back to Select.
+        editor.choose(.draw)
+        guard editor.drawMode, !editor.drawBar.bar.isHidden, DrawBar.drawingTools.contains(canvas.tool) else {
+          fail("Draw should show the drawing bar and pick a drawing tool, not \(canvas.tool)")
         }
-        let draw = toolButton("Draw")
-        click(CGPoint(x: draw.bounds.midX, y: draw.bounds.midY), in: draw)
-        guard [.pencil, .pen, .highlighter].contains(canvas.tool), !tools.isExpanded else {
-          fail("clicking Draw should pick a drawing tool, not \(canvas.tool)")
-        }
-        click(CGPoint(x: draw.bounds.midX, y: draw.bounds.midY), in: draw)
-        guard tools.isExpanded else { fail("clicking the chosen tool again should open its group") }
-        guard let brush = allButtons(in: tools).first(where: { $0.identifier?.rawValue == Tool.pen.rawValue }) else {
-          fail("the open group should offer the brush")
-        }
-        click(CGPoint(x: brush.bounds.midX, y: brush.bounds.midY), in: brush)
-        guard canvas.tool == .pen, !tools.isExpanded else { fail("picking a variant should choose it and close the group") }
-        pass("the Tools column picks tools and opens each group in place")
+        guard let brush = editor.drawBar.toolMenu().items.first(where: { ($0.representedObject as? String) == Tool.pen.rawValue })
+        else { fail("the drawing menu should offer the brush") }
+        editor.drawBar.chooseTool(brush)
+        guard canvas.tool == .pen else { fail("choosing Brush should use it") }
+        let select = editor.drawBar.select
+        click(CGPoint(x: select.bounds.midX, y: select.bounds.midY), in: select)
+        guard canvas.tool == .select, !editor.drawBar.bar.isHidden else { fail("Select in the drawing bar should keep drawing") }
+        let toolButton = editor.drawBar.toolButton
+        click(CGPoint(x: toolButton.bounds.midX, y: toolButton.bounds.midY), in: toolButton)
+        guard canvas.tool == .pen else { fail("clicking the drawing tool should return to it") }
+        editor.choose(.draw)
+        guard !editor.drawMode, editor.drawBar.bar.isHidden, canvas.tool == .select else { fail("Draw again should stop drawing") }
+        editor.choose(.draw)
+        pass("Draw in the toolbar shows the drawing bar, whose tools and Select work")
 
         // Draw, undo, redo.
         let points = (0...40).map { CGPoint(x: c.x - 200 + CGFloat($0) * 8, y: c.y + sin(CGFloat($0) / 5) * 40) }
@@ -435,6 +437,9 @@
         guard canvas.drawing.selection.isEmpty else { fail("clicking inside an unfilled rectangle shouldn't select it") }
         click(CGPoint(x: box.minX + 40, y: box.minY), in: canvas)
         guard canvas.drawing.selection == [rect.id] else { fail("clicking a rectangle's edge should select it") }
+        guard !editor.formatBar.bar.isHidden, let barFrame = Optional(editor.formatBar.bar.frame),
+          barFrame.minY > (canvas.window?.contentView?.convert(canvas.convert(box, to: nil), from: nil).maxY ?? 0)
+        else { fail("the format bar should appear above the selected rectangle") }
         drag(line(from: CGPoint(x: box.minX + 40, y: box.minY), to: CGPoint(x: box.minX + 77, y: box.minY + 23)), in: canvas, flags: .command)
         guard same(canvas.scene[rect.id]?.frame, box.offsetBy(dx: 37, dy: 23)) else {
           fail("dragging should move the rectangle, got \(String(describing: canvas.scene[rect.id]?.frame))")
@@ -594,7 +599,6 @@
         if let open = environment["BRISTLE_OPEN"] {
           controller.openDocument(withContentsOf: URL(fileURLWithPath: open), display: true) { _, _, _ in }
         }
-        if environment["BRISTLE_INSPECTOR"] == "1" { editor.toggleInspector(nil) }
         if let width = environment["BRISTLE_WIDTH"].flatMap(Double.init) {
           editor.window?.setContentSize(NSSize(width: width, height: environment["BRISTLE_HEIGHT"].flatMap(Double.init) ?? 800))
         }
@@ -611,9 +615,9 @@
             let text = c.scene.elements.first { $0.kind == .text }!
             c.beginTextEditing(text.id)
           }
-          if environment["BRISTLE_EXPAND"] == "1" { target.tools.expand(1) }
+          if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
           _ = canvas
-          after(1) {
+          after(environment["BRISTLE_WAIT"].flatMap(Double.init) ?? 1) {
             guard let window = target.window else { fail("no window to capture") }
             let capture = Process()
             capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")

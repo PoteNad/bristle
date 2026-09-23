@@ -502,6 +502,7 @@ extension CanvasView {
     let current = interaction
     interaction = .none
     updateGuides([])
+    defer { delegate?.canvasViewDidFinishInteraction(self) }
     switch current {
     case .none: break
     case .panning:

@@ -9,7 +9,7 @@ extension Notification.Name {
   public static let drawingSelectionDidChange = Notification.Name("BristleDrawingSelectionDidChange")
 }
 
-/// A scene being edited, with undo. The document, the canvas, and the inspector share one.
+/// A scene being edited, with undo. The document, the canvas, and the app's bars share one.
 ///
 /// Every edit goes through `edit(_:_:)`, or a gesture for edits that follow the pointer, and
 /// becomes one undo step that restores the selection with it.

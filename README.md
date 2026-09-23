@@ -2,7 +2,7 @@
 
 Bristle is a small, native macOS drawing app. It has the immediacy of a paint program — pick a pencil and draw — but everything you draw stays an editable object: shapes, lines and arrows, freehand strokes, text, and images. Nothing is flattened into pixels behind your back, so you can open a screenshot, mark it up, save an ordinary PNG, and reopen it later with every annotation still editable. Bristle requires macOS 13 or newer, works entirely offline, and has no third-party dependencies.
 
-![Bristle drawing shapes, an arrow, ink, and text, with the Tools column and the inspector](Assets/Bristle-Screenshot.png)
+![Bristle drawing shapes, an arrow, ink, and text, with a stroke selected and its format bar above it](Assets/Bristle-Screenshot.png)
 
 ## Install
 
@@ -19,9 +19,11 @@ The Homebrew cask verifies the app bundle and removes its quarantine attribute s
 ## How it works
 
 - **The canvas** is a sheet of a set size, white or transparent, like a paint program's. It sets what is exported and printed. Objects can reach past its edges and are kept, shown faded, and left out of exports. Canvas ▸ Canvas Size, Crop to Selection, Fit Canvas to Drawing, and the canvas rotate and flip commands move objects, never pixels.
-- **The Tools column** floats over the canvas. Click a tool to use it; click the chosen tool again, or press and hold, to open its group in place with its other tools, a few line widths, and a colour well. Every tool has a key: V Select, P Pencil, B Brush, M Highlighter, E Eraser, L Line, A Arrow, R Rectangle, O Ellipse, G Polygon, T Text, F Fill, I Eyedropper. Hold Space to pan.
-- **The inspector** (⌥⌘I) shows the selection's style, text, arrangement, and image options, the current tool's style when nothing is selected, and the canvas's size and background when the Select tool has nothing selected.
-- **The Palette** (⇧⌘C) is the system colour panel. It colours the selection, or the current tool when nothing is selected, and every colour well opens it.
+- **The toolbar** holds the tools, as Freeform's does: Select, Draw, Shapes (click it again for rectangles, ellipses, polygons, lines, and arrows), Text, and Image. Every tool also has a key: V Select, P Pencil, B Brush, M Highlighter, E Eraser, L Line, A Arrow, R Rectangle, O Ellipse, G Polygon, T Text, F Fill, I Eyedropper. Hold Space to pan.
+- **Draw** shows a bar at the bottom of the window with Select, the drawing tool — click it again for the pencil, brush, highlighter, erasers, fill, and eyedropper, with a row of line widths — and the tool's colour.
+- **The format bar** appears above whatever is selected, with its fill, border or line colour, line width and style, arrowheads, text size and alignment, crop for images, and a menu of the Arrange commands.
+- **The Palette** opens from any colour swatch: Bristle's colours, the colours used recently, opacity, and More Colors for the system colour panel. Format ▸ Show Palette (⇧⌘C) opens it too.
+- **The zoom control** at the bottom left and **the canvas control** at the bottom right hold the zoom level, the grid, and the canvas's size and background.
 - **Opening an image** makes a canvas the image's size with the image locked in place underneath, ready to mark up. Saving an unedited image writes back the same bytes.
 - **PNGs keep the drawing.** A PNG saved by Bristle is an ordinary image everywhere else, and also carries the drawing in a private chunk, so it reopens in Bristle with every object editable. If the image is changed in another app, Bristle notices that the pixels no longer match, opens the image as it is now, and offers to restore the earlier objects.
 
@@ -38,7 +40,7 @@ Bristle deliberately leaves out layers panels, filters and photo adjustments, cu
 - Copy Style and Paste Style, Select All, and Tab to move from object to object.
 - Copying writes Bristle objects, PNG, and PDF, so a copy pastes as editable objects in Bristle and as a picture everywhere else; objects can be dragged out to other apps.
 - Export as PNG (optionally editable in Bristle), SVG, PDF, or JPEG at 1×, 2×, or 3×; Print; and Share.
-- Zoom from 5% to 3200% by pinching, ⌘-scrolling, the toolbar, or ⌘+, ⌘−, ⌘0, and ⌘9.
+- Zoom from 5% to 3200% by pinching, ⌘-scrolling, the zoom control, or ⌘+, ⌘−, ⌘0, and ⌘9.
 - Light and dark appearances, full keyboard access, and VoiceOver descriptions of every object on the canvas.
 
 ## File format
@@ -80,7 +82,7 @@ The build is optimized and ad-hoc signed for the current Mac. Open `Package.swif
 
 ## Using the canvas in another app
 
-The canvas is the `BristleCanvas` library in this package, separate from the Bristle app, and the drawing model, file format, and rendering are in `BristleCore`. `CanvasView` provides every tool, selection, text editing, the clipboard, drag and drop, zoom, and VoiceOver support. The app adds documents, the Tools column, the toolbar, the inspector, and Settings around it.
+The canvas is the `BristleCanvas` library in this package, separate from the Bristle app, and the drawing model, file format, and rendering are in `BristleCore`. `CanvasView` provides every tool, selection, text editing, the clipboard, drag and drop, zoom, and VoiceOver support. The app adds documents, the toolbar, the drawing and format bars, the Palette, and Settings around it.
 
 ```swift
 import BristleCanvas

@@ -50,6 +50,9 @@ extension CanvasView {
     return SelectionBox(frame: scene.frameBounds(of: drawing.selection), rotation: 0)
   }
 
+  /// Where the selection is on the canvas, for placing controls beside it.
+  public var selectionBounds: CGRect? { selectionBox().map { CGRect(boundingPoints: $0.corners) } }
+
   /// Whether the selection is one line or arrow, which is edited by its points instead of a box.
   var selectedLine: Element? {
     let selected = drawing.selectedElements
