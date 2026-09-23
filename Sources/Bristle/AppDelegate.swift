@@ -115,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(edit, "Deselect All", #selector(CanvasView.deselectAll(_:)), "a", modifiers: [.command, .shift])
 
     let format = menu("Format")
-    add(format, "Hide Palette", #selector(Editor.togglePalette(_:)), "c", modifiers: [.command, .shift])
+    add(format, "Show Palette", #selector(Editor.togglePalette(_:)), "c", modifiers: [.command, .shift])
     add(format, "Show Fonts", #selector(Editor.showFonts(_:)), "t", modifiers: [.command, .option])
     let bold = add(format, "Bold", #selector(NSFontManager.addFontTrait(_:)), "b", target: NSFontManager.shared)
     bold.tag = Int(NSFontTraitMask.boldFontMask.rawValue)

@@ -11,7 +11,7 @@ enum PreferenceKey {
   static let snapsToGrid = "snapsToGrid"
   static let gridSpacing = "gridSpacing"
   static let returnsToSelect = "returnsToSelect"
-  static let paletteHidden = "paletteHidden"
+  static let paletteVisible = "paletteVisible"
   /// Each tool's style, as JSON by tool name.
   static let toolStyles = "toolStyles"
   /// The content size of the window the user last resized, which new windows open at.
@@ -94,6 +94,7 @@ enum AppPreferences {
       PreferenceKey.snapsToGrid: false,
       PreferenceKey.gridSpacing: 20,
       PreferenceKey.returnsToSelect: false,
+      PreferenceKey.paletteVisible: true,
     ])
   }
 

@@ -4,7 +4,7 @@ import BristleCore
 import UniformTypeIdentifiers
 
 /// A document window: every tool in the toolbar, as in Excalidraw, in capsules as in Freeform;
-/// the canvas filling the window; and the Palette at its side while there's something to style.
+/// the canvas; and the Palette in a sidebar that shares the window, like Plainst's symbols.
 @MainActor
 final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, NSToolbarDelegate,
   NSSharingServicePickerToolbarItemDelegate, CanvasViewDelegate
@@ -16,6 +16,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   private weak var note: BristleDocument?
   private(set) var toolGroups: [NSToolbarItemGroup] = []
   private let root = NSView()
+  private var paletteItem: NSSplitViewItem!
   private var inFullScreenTransition = false
   private var shownOnce = false
   /// The drawing tool Draw uses: the brush chosen last.
@@ -47,17 +48,17 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     canvas.styles = AppPreferences.toolStyles
     canvas.configuration = AppPreferences.canvasConfiguration
     canvas.tool = .select
-    // Fitting the canvas leaves room for the Palette at the left and the bars at the bottom.
-    canvas.fitInsets = NSEdgeInsets(top: 24, left: 248, bottom: 64, right: 24)
+    // Fitting the canvas leaves room for the bars at the bottom.
+    canvas.fitInsets = NSEdgeInsets(top: 24, left: 24, bottom: 64, right: 24)
     palette.canvas = canvas
-    palette.isHiddenByUser = UserDefaults.standard.bool(forKey: PreferenceKey.paletteHidden) && !isAutomatedCheck
+    palette.editor = self
     zoomBar.canvas = canvas
     canvasBar.canvas = canvas
     canvasBar.editor = self
 
     let scroll = canvas.scrollView
     root.addSubview(scroll)
-    let overlays = [palette.view, zoomBar.bar, canvasBar.bar]
+    let overlays = [zoomBar.bar, canvasBar.bar]
     overlays.forEach(root.addSubview)
     for view in [scroll] + overlays { view.translatesAutoresizingMaskIntoConstraints = false }
     let guide = root.safeAreaLayoutGuide
@@ -66,9 +67,6 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
       scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
       scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-      palette.view.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 12),
-      palette.view.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
-      palette.view.bottomAnchor.constraint(lessThanOrEqualTo: zoomBar.bar.topAnchor, constant: -12),
       zoomBar.bar.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
       zoomBar.bar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
       canvasBar.bar.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16),
@@ -76,7 +74,18 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     ])
     let controller = NSViewController()
     controller.view = root
-    window.contentViewController = controller
+    // The Palette shares the window beside the canvas, like Plainst's symbols sidebar.
+    let split = EditorSplitViewController()
+    split.editor = self
+    split.addSplitViewItem(NSSplitViewItem(viewController: controller))
+    paletteItem = NSSplitViewItem(inspectorWithViewController: palette)
+    paletteItem.canCollapse = true
+    paletteItem.minimumThickness = 260
+    paletteItem.maximumThickness = 340
+    paletteItem.isCollapsed = !isAutomatedCheck && !UserDefaults.standard.bool(forKey: PreferenceKey.paletteVisible)
+    split.addSplitViewItem(paletteItem)
+    if !isAutomatedCheck { split.splitView.autosaveName = "BristleEditorSplit" }
+    window.contentViewController = split
     placeWindow()
     updateBars()
 
@@ -215,6 +224,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   static let drawItems = NSToolbarItem.Identifier("draw")
   static let shapeItems = NSToolbarItem.Identifier("shapes")
   static let shareToolbarItem = NSToolbarItem.Identifier("share")
+  static let paletteToolbarItem = NSToolbarItem.Identifier("palette")
 
   /// The tools in the toolbar, in two capsules: drawing, then shapes, text, and images.
   enum Slot: Int, CaseIterable {
@@ -225,7 +235,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   }
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [.flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, Self.shareToolbarItem]
+    [.flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -283,6 +293,17 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       item.delegate = self
       return item
     }
+    if itemIdentifier == Self.paletteToolbarItem {
+      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+      item.image = NSImage(systemSymbolName: "paintbrush", accessibilityDescription: "Palette")
+      item.label = "Palette"
+      item.paletteLabel = "Palette"
+      item.toolTip = "Show or hide the Palette (⇧⌘C)"
+      item.target = self
+      item.action = #selector(togglePalette(_:))
+      item.isBordered = true
+      return item
+    }
     let slots: [Slot]
     switch itemIdentifier {
     case Self.drawItems: slots = Slot.drawing
@@ -294,9 +315,13 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       labels: slots.map { slotDetails($0).label }, target: self, action: #selector(chooseSlot(_:)))
     group.label = itemIdentifier == Self.drawItems ? "Draw" : "Shapes"
     group.paletteLabel = group.label
+    // Each tool acts on its own: on macOS 26 the toolbar draws the group, so there's no
+    // segmented control to ask which segment was clicked.
     for (item, slot) in zip(group.subitems, slots) {
       item.toolTip = slotDetails(slot).tip
       item.tag = slot.rawValue
+      item.target = self
+      item.action = #selector(chooseSlotItem(_:))
     }
     if let control = group.view as? NSSegmentedControl {
       for (i, slot) in slots.enumerated() { control.setToolTip(slotDetails(slot).tip, forSegment: i) }
@@ -340,6 +365,11 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     let index = (sender.view as? NSSegmentedControl)?.selectedSegment ?? -1
     guard slots.indices.contains(index) else { return }
     choose(slots[index], from: sender)
+  }
+
+  @objc func chooseSlotItem(_ sender: NSToolbarItem) {
+    guard let slot = Slot(rawValue: sender.tag) else { return }
+    choose(slot, from: sender)
   }
 
   func choose(_ slot: Slot, from sender: Any? = nil) {
@@ -391,11 +421,24 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     NotificationCenter.default.post(name: .canvasDefaultsDidChange, object: nil)
   }
 
-  /// Format ▸ Show Palette shows or hides the Palette beside the canvas.
+  var paletteVisible: Bool { !paletteItem.isCollapsed }
+
+  /// The brush button and Format ▸ Show Palette slide the Palette in and out, as Plainst's
+  /// symbols sidebar does, without resizing the window.
   @objc func togglePalette(_ sender: Any?) {
-    palette.isHiddenByUser.toggle()
-    if !isAutomatedCheck { UserDefaults.standard.set(palette.isHiddenByUser, forKey: PreferenceKey.paletteHidden) }
-    palette.update()
+    let show = paletteItem.isCollapsed
+    if show { palette.update() }
+    // Checks look at the layout right away, so they skip the slide.
+    guard !isAutomatedCheck else {
+      paletteItem.isCollapsed = !show
+      return
+    }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.2
+      context.allowsImplicitAnimation = true
+      paletteItem.animator().isCollapsed = !show
+    }
+    if !isAutomatedCheck { UserDefaults.standard.set(show, forKey: PreferenceKey.paletteVisible) }
   }
 
   @objc func showFonts(_ sender: Any?) {
@@ -476,7 +519,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     let defaults = UserDefaults.standard
     switch menuItem.action {
     case #selector(togglePalette(_:)):
-      menuItem.title = palette.isHiddenByUser ? "Show Palette" : "Hide Palette"
+      menuItem.title = paletteVisible ? "Hide Palette" : "Show Palette"
     case #selector(toggleGrid(_:)):
       menuItem.state = defaults.bool(forKey: PreferenceKey.showsGrid) ? .on : .off
     case #selector(toggleSnapToGrid(_:)):
@@ -521,5 +564,16 @@ final class AnchorPicker: NSView {
   @objc private func choose(_ sender: NSButton) {
     anchor = Scene.Anchor(rawValue: sender.tag) ?? .topLeft
     for button in buttons { button.state = button === sender ? .on : .off }
+  }
+}
+
+/// Sends the system's Toggle Inspector command to the Palette, so the split view doesn't take
+/// it for itself.
+final class EditorSplitViewController: NSSplitViewController {
+  weak var editor: Editor?
+
+  @available(macOS 14.0, *)
+  override func toggleInspector(_ sender: Any?) {
+    if let editor { editor.togglePalette(sender) } else { super.toggleInspector(sender) }
   }
 }

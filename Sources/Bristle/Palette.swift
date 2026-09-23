@@ -67,27 +67,6 @@ final class SwatchButton: NSButton {
   }
 }
 
-/// An opaque rounded card in the window's background color, with a hairline edge.
-final class PanelView: NSView {
-  override init(frame: NSRect) {
-    super.init(frame: frame)
-    wantsLayer = true
-    layer?.cornerRadius = 14
-    layer?.cornerCurve = .continuous
-    layer?.masksToBounds = true
-    layer?.borderWidth = 0.5
-  }
-
-  required init?(coder: NSCoder) { fatalError() }
-
-  override var wantsUpdateLayer: Bool { true }
-
-  override func updateLayer() {
-    layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-    layer?.borderColor = NSColor.separatorColor.cgColor
-  }
-}
-
 /// Sends the system color panel's changes to whatever last opened it.
 @MainActor
 final class ColorPanelRelay: NSObject {
@@ -120,11 +99,12 @@ final class ClosureTarget: NSObject {
   @MainActor @objc func fire(_ sender: Any?) { body(sender) }
 }
 
-/// The Palette: a card at the side of the canvas, as Excalidraw's, with everything about the
-/// current tool or the selection in plain view — colors, width, line style, text, opacity,
-/// layers, and actions. It shows while a drawing tool is in use or something is selected.
+/// The Palette: a sidebar beside the canvas, like Plainst's symbols sidebar, with everything
+/// about the current tool or the selection in plain view, as Excalidraw shows it — colors,
+/// width, line style, text, opacity, layers, and actions — and the canvas when there's
+/// nothing else to style.
 @MainActor
-final class Palette: NSObject {
+final class Palette: NSViewController {
   static let strokes = ["#1D1D1F", "#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#007AFF", "#AF52DE"].compactMap(Color.init(hex:))
   static let fills = ["#FFFFFF", "#FFD8D6", "#FFE8CC", "#FFF4C2", "#D3F5DB", "#D1E7FF", "#EEDCF9"].compactMap(Color.init(hex:))
   static let fonts: [(name: String, title: String, font: String)] = [
@@ -139,51 +119,63 @@ final class Palette: NSObject {
   static let sizes: [(String, CGFloat)] = [("S", 16), ("M", 24), ("L", 36), ("XL", 56)]
 
   weak var canvas: CanvasView?
-  let view: NSView
+  weak var editor: Editor?
   private let stack = NSStackView()
+  private let scroll = NSScrollView()
   private var builtFor = ""
   private var refreshers: [() -> Void] = []
   private var targets: [ClosureTarget] = []
-  /// Hidden with Format ▸ Hide Palette.
-  var isHiddenByUser = false
+  /// Space between the sidebar's edges and its controls, as in Plainst's sidebars.
+  static let margin: CGFloat = 14
 
-  override init() {
+  override func loadView() {
+    let root = NSView()
     stack.orientation = .vertical
     stack.alignment = .leading
-    stack.spacing = 12
-    stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+    stack.spacing = 14
+    stack.edgeInsets = NSEdgeInsets(top: 10, left: Self.margin, bottom: 20, right: Self.margin)
+    let document = FlippedView()
+    document.translatesAutoresizingMaskIntoConstraints = false
     stack.translatesAutoresizingMaskIntoConstraints = false
-    stack.widthAnchor.constraint(equalToConstant: 212).isActive = true
-    // An opaque card, as Excalidraw's, so the drawing never shows through the controls.
-    let material = PanelView()
-    material.addSubview(stack)
+    document.addSubview(stack)
+    scroll.documentView = document
+    scroll.hasVerticalScroller = true
+    scroll.autohidesScrollers = true
+    scroll.drawsBackground = false
+    scroll.translatesAutoresizingMaskIntoConstraints = false
+    root.addSubview(scroll)
     NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: material.leadingAnchor),
-      stack.trailingAnchor.constraint(equalTo: material.trailingAnchor),
-      stack.topAnchor.constraint(equalTo: material.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: material.bottomAnchor),
+      scroll.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+      scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+      scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+      scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+      stack.topAnchor.constraint(equalTo: document.topAnchor),
+      stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+      stack.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+      stack.bottomAnchor.constraint(equalTo: document.bottomAnchor),
+      document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+      document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+      document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
     ])
-    // The shadow sits on a container, since the material clips to its rounded corners.
-    let container = NSView()
-    container.wantsLayer = true
-    container.shadow = NSShadow()
-    container.layer?.shadowOpacity = 0.18
-    container.layer?.shadowRadius = 10
-    container.layer?.shadowOffset = CGSize(width: 0, height: -2)
-    material.translatesAutoresizingMaskIntoConstraints = false
-    container.addSubview(material)
-    NSLayoutConstraint.activate([
-      material.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-      material.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-      material.topAnchor.constraint(equalTo: container.topAnchor),
-      material.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-    ])
-    view = container
-    super.init()
-    view.setAccessibilityElement(true)
-    view.setAccessibilityRole(.group)
+    view = root
     view.setAccessibilityLabel("Palette")
   }
+
+  /// The sidebar's headings, top to bottom, for the checks.
+  var sectionTitles: [String] {
+    func labels(_ view: NSView) -> [String] {
+      if let field = view as? NSTextField, !field.isEditable, !field.isSelectable || true, field.font?.pointSize ?? 0 <= NSFont.systemFontSize + 1,
+        field.font?.fontDescriptor.symbolicTraits.contains(.bold) == true || (field.font?.fontName.contains("Semibold") ?? false)
+      {
+        return [field.stringValue]
+      }
+      return view.subviews.flatMap(labels)
+    }
+    return labels(stack)
+  }
+
+  /// The width of the controls, the sidebar less its margins.
+  private var contentWidth: NSLayoutDimension { stack.widthAnchor }
 
   // MARK: What's shown
 
@@ -209,17 +201,9 @@ final class Palette: NSObject {
     return elements.first.map(Style.init) ?? canvas.style
   }
 
-  /// Whether there's anything to show.
-  var isRelevant: Bool {
-    guard let canvas, !isHiddenByUser else { return false }
-    return !elements.isEmpty || [.pencil, .pen, .highlighter, .eraser, .strokeEraser, .fill, .line, .arrow, .rectangle, .ellipse, .polygon, .text].contains(canvas.tool)
-  }
-
   func update() {
-    guard let canvas else { return }
-    view.isHidden = !isRelevant
-    guard isRelevant else { return }
-    let key = "\(canvas.tool)|\(kinds.map(\.rawValue).sorted())|\(elements.count)|\(elements.contains { !$0.groups.isEmpty })|\(elements.first?.brush.rawValue ?? "")"
+    guard isViewLoaded, let canvas else { return }
+    let key = "\(canvas.tool)|\(kinds.map(\.rawValue).sorted())|\(elements.count)|\(elements.contains { !$0.groups.isEmpty })|\(elements.first?.brush.rawValue ?? "")|\(canvas.drawing.selectedElements.contains(where: \.locked))"
     if key != builtFor {
       builtFor = key
       rebuild()
@@ -233,6 +217,15 @@ final class Palette: NSObject {
     refreshers = []
     targets = []
     let kinds = self.kinds
+    title(heading)
+    if canvas.drawing.selectedElements.contains(where: \.locked) && elements.isEmpty {
+      note("Locked objects can’t be changed. Choose Arrange ▸ Unlock All to change them.")
+      return
+    }
+    if kinds.isEmpty && ![Tool.eraser, .strokeEraser, .fill].contains(canvas.tool) {
+      canvasSection()
+      return
+    }
     let selecting = !elements.isEmpty
     let tool = canvas.tool
     let shapes = !kinds.isDisjoint(with: [.rectangle, .ellipse, .polygon])
@@ -302,6 +295,7 @@ final class Palette: NSObject {
       let end = arrowPopUp(heads, start: false)
       let row = NSStackView(views: [start, end])
       row.spacing = 6
+      row.distribution = .fillEqually
       add("Arrowheads", row)
     }
     if kinds.contains(.text) {
@@ -332,17 +326,18 @@ final class Palette: NSObject {
       slider.target = target
       slider.action = #selector(ClosureTarget.fire(_:))
       refreshers.append { [weak self, weak slider] in slider?.doubleValue = Double((self?.style.opacity ?? 1) * 100) }
-      add("Opacity", slider, fill: true)
+      add("Opacity", slider)
     }
     if selecting {
-      add("Layers", buttons([
+      divider()
+      add("Layers", fill: false, buttons([
         ("square.3.layers.3d.bottom.filled", "Send to Back", #selector(CanvasView.sendToBack(_:))),
         ("square.2.layers.3d.bottom.filled", "Send Backward", #selector(CanvasView.sendBackward(_:))),
         ("square.2.layers.3d.top.filled", "Bring Forward", #selector(CanvasView.bringForward(_:))),
         ("square.3.layers.3d.top.filled", "Bring to Front", #selector(CanvasView.bringToFront(_:))),
       ]))
       if elements.count > 1 {
-        add("Align", buttons([
+        add("Align", fill: false, buttons([
           ("align.horizontal.left", "Align Left", #selector(CanvasView.alignObjects(_:))),
           ("align.horizontal.center", "Align Center", #selector(CanvasView.alignObjects(_:))),
           ("align.horizontal.right", "Align Right", #selector(CanvasView.alignObjects(_:))),
@@ -362,22 +357,87 @@ final class Palette: NSObject {
       }
       actions.append(("lock", "Lock (⌘L)", #selector(CanvasView.lock(_:))))
       if kinds == [.image] { actions.append(("crop", "Crop", #selector(CanvasView.cropSelectedImage(_:)))) }
-      add("Actions", buttons(actions))
+      add("Actions", fill: false, buttons(actions))
     }
   }
 
   // MARK: Building
 
-  private func add(_ title: String, _ control: NSView, fill: Bool = false) {
+  /// What the sidebar is showing, as its heading.
+  private var heading: String {
+    guard let canvas else { return "" }
+    let selected = elements
+    if selected.count == 1 { return selected[0].kindName }
+    if selected.count > 1 {
+      let names = Set(selected.map(\.kindName))
+      return names.count == 1 ? "\(selected.count) \(names.first!)s".replacingOccurrences(of: "Texts", with: "Text Boxes") : "\(selected.count) Objects"
+    }
+    if canvas.tool == .select || canvas.tool == .eyedropper { return "Canvas" }
+    return canvas.tool.title
+  }
+
+  private func title(_ text: String) {
+    let label = NSTextField(labelWithString: text)
+    label.font = .systemFont(ofSize: NSFont.systemFontSize + 1, weight: .semibold)
+    stack.addArrangedSubview(label)
+    stack.setCustomSpacing(12, after: label)
+  }
+
+  private func note(_ text: String) {
+    let label = NSTextField(wrappingLabelWithString: text)
+    label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    label.textColor = .secondaryLabelColor
+    stack.addArrangedSubview(label)
+    label.widthAnchor.constraint(equalTo: contentWidth, constant: -Self.margin * 2).isActive = true
+  }
+
+  /// A section: a small heading as Plainst's sidebars have, and its control at full width.
+  private func add(_ title: String, _ control: NSView, fill: Bool = true) {
     let label = NSTextField(labelWithString: title)
-    label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+    label.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
     label.textColor = .secondaryLabelColor
     let section = NSStackView(views: [label, control])
     section.orientation = .vertical
     section.alignment = .leading
-    section.spacing = 5
+    section.spacing = 6
     stack.addArrangedSubview(section)
-    if fill { control.widthAnchor.constraint(equalToConstant: 186).isActive = true }
+    section.widthAnchor.constraint(equalTo: contentWidth, constant: -Self.margin * 2).isActive = true
+    if fill { control.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true }
+  }
+
+  private func add(_ title: String, fill: Bool, _ control: NSView) { add(title, control, fill: fill) }
+
+  private func divider() {
+    let line = NSBox()
+    line.boxType = .separator
+    stack.addArrangedSubview(line)
+    line.widthAnchor.constraint(equalTo: contentWidth, constant: -Self.margin * 2).isActive = true
+  }
+
+  /// When nothing is selected: the canvas's size and background.
+  private func canvasSection() {
+    guard let canvas else { return }
+    let size = NSTextField(labelWithString: "")
+    size.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+    refreshers.append { [weak canvas] in
+      guard let paper = canvas?.scene.paper else { return }
+      size.stringValue = "\(Int(paper.width)) × \(Int(paper.height)) points"
+    }
+    let change = NSButton(title: "Canvas Size…", target: editor, action: #selector(Editor.showCanvasSize(_:)))
+    let fit = NSButton(title: "Fit to Drawing", target: canvas, action: #selector(CanvasView.fitCanvasToDrawing(_:)))
+    for button in [change, fit] { button.controlSize = .small }
+    let buttons = NSStackView(views: [change, fit])
+    buttons.spacing = 6
+    let column = NSStackView(views: [size, buttons])
+    column.orientation = .vertical
+    column.alignment = .leading
+    column.spacing = 8
+    add("Size", column, fill: false)
+    add("Background", colorRow(Self.fills, allowsNone: true, value: { [weak canvas] in canvas?.scene.paper.background }) {
+      [weak canvas] color in canvas?.drawing.edit(color == nil ? "Clear Background" : "Background") { $0.paper.background = color }
+    })
+    divider()
+    note("Choose a tool in the toolbar to draw, or select something to change how it looks. Objects past the canvas’s edges are kept, but left out of exports.")
   }
 
   private func colorRow(
@@ -386,7 +446,7 @@ final class Palette: NSObject {
   ) -> NSView {
     var swatches: [SwatchButton] = []
     let row = NSStackView()
-    row.spacing = 0
+    row.distribution = .equalSpacing
     let choices: [Color?] = (allowsNone ? [nil] : []) + colors.prefix(allowsNone ? 6 : 7).map { $0 }
     for color in choices {
       let swatch = SwatchButton(.color(color))
@@ -483,10 +543,8 @@ final class Palette: NSObject {
     images: [(NSImage, String)], selected: @escaping @MainActor () -> Int?, choose: @escaping @MainActor (Int) -> Void
   ) -> NSSegmentedControl {
     let control = NSSegmentedControl(images: images.map(\.0), trackingMode: .selectOne, target: nil, action: nil)
-    for (i, item) in images.enumerated() {
-      control.setToolTip(item.1, forSegment: i)
-      control.setWidth(186 / CGFloat(images.count) - 2, forSegment: i)
-    }
+    for (i, item) in images.enumerated() { control.setToolTip(item.1, forSegment: i) }
+    control.segmentDistribution = .fillEqually
     wire(control, selected: selected, choose: choose)
     return control
   }
@@ -495,7 +553,7 @@ final class Palette: NSObject {
     labels: [String], selected: @escaping @MainActor () -> Int?, choose: @escaping @MainActor (Int) -> Void
   ) -> NSSegmentedControl {
     let control = NSSegmentedControl(labels: labels, trackingMode: .selectOne, target: nil, action: nil)
-    for i in labels.indices { control.setWidth(186 / CGFloat(labels.count) - 2, forSegment: i) }
+    control.segmentDistribution = .fillEqually
     wire(control, selected: selected, choose: choose)
     return control
   }
@@ -541,7 +599,6 @@ final class Palette: NSObject {
     targets.append(target)
     popup.target = target
     popup.action = #selector(ClosureTarget.fire(_:))
-    popup.widthAnchor.constraint(equalToConstant: 90).isActive = true
     refreshers.append { [weak self, weak popup] in
       guard let self else { return }
       popup?.selectItem(at: heads.firstIndex(of: start ? self.style.startArrowhead : self.style.endArrowhead) ?? 0)

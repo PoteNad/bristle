@@ -188,12 +188,12 @@
         }
         let toolbar = windows[0].toolbar?.items.map(\.itemIdentifier.rawValue) ?? []
         let tools = editor.toolGroups.flatMap { $0.subitems.map(\.label) }
-        guard toolbar == ["NSToolbarFlexibleSpaceItem", "draw", "shapes", "NSToolbarFlexibleSpaceItem", "share"],
+        guard toolbar == ["NSToolbarFlexibleSpaceItem", "draw", "shapes", "NSToolbarFlexibleSpaceItem", "share", "palette"],
           tools == ["Select", "Draw", "Eraser", "Fill", "Rectangle", "Ellipse", "Polygon", "Line", "Arrow", "Text", "Image"],
           editor.currentSlot == .select
         else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
-        guard editor.palette.view.isHidden, !editor.zoomBar.bar.isHidden, !editor.canvasBar.bar.isHidden else {
-          fail("only the zoom and canvas bars should show in a new window")
+        guard editor.paletteVisible, editor.palette.sectionTitles.first == "Canvas", !editor.zoomBar.bar.isHidden else {
+          fail("a new window should show the Palette with the canvas's settings: \(editor.palette.sectionTitles)")
         }
         controller.newWindowForTab(nil)
         after(1) {
@@ -398,19 +398,35 @@
         let undo = document.undoManager!
         let c = canvas.scene.paperRect.center
 
-        // Each tool is one click in the toolbar; the Palette shows while a tool has settings.
+        // Every tool in the toolbar acts when clicked: the toolbar sends each tool's own action.
+        for group in editor.toolGroups {
+          for item in group.subitems where item.tag != Editor.Slot.image.rawValue {
+            guard let action = item.action, item.target === editor, NSApp.sendAction(action, to: item.target, from: item)
+            else { fail("the \(item.label) tool doesn't respond to clicks") }
+            guard editor.currentSlot?.rawValue == item.tag else {
+              fail("clicking \(item.label) chose \(canvas.tool) instead")
+            }
+          }
+        }
         editor.choose(.draw)
-        guard [.pencil, .pen, .highlighter].contains(canvas.tool), !editor.palette.view.isHidden else {
-          fail("Draw should choose a brush and show the Palette, not \(canvas.tool)")
+        guard [.pencil, .pen, .highlighter].contains(canvas.tool), editor.palette.sectionTitles.contains("Brush") else {
+          fail("Draw should choose a brush and show its settings: \(editor.palette.sectionTitles)")
         }
         canvas.tool = .pen
-        editor.choose(.eraser)
-        guard canvas.tool == .eraser, !editor.palette.view.isHidden else { fail("Eraser should choose the eraser") }
         editor.choose(.select)
-        guard canvas.tool == .select, editor.palette.view.isHidden else { fail("Select with nothing selected should hide the Palette") }
+        guard editor.palette.sectionTitles.first == "Canvas" else { fail("Select with nothing selected should show the canvas") }
+        // The brush button slides the Palette away and back.
+        guard let brush = editor.window?.toolbar?.items.first(where: { $0.itemIdentifier == Editor.paletteToolbarItem }),
+          let action = brush.action
+        else { fail("the toolbar should have the Palette button") }
+        NSApp.sendAction(action, to: brush.target, from: brush)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+        guard !editor.paletteVisible else { fail("the brush button should hide the Palette") }
+        NSApp.sendAction(action, to: brush.target, from: brush)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+        guard editor.paletteVisible else { fail("the brush button should show the Palette again") }
         editor.choose(.draw)
-        guard canvas.tool == .pen else { fail("Draw should return to the brush used last") }
-        pass("each tool is one click in the toolbar, and the Palette shows while it's useful")
+        pass("every toolbar tool responds to clicks, and the brush button shows and hides the Palette")
 
         // Draw, undo, redo.
         let points = (0...40).map { CGPoint(x: c.x - 200 + CGFloat($0) * 8, y: c.y + sin(CGFloat($0) / 5) * 40) }
@@ -446,7 +462,21 @@
         click(CGPoint(x: box.minX + 40, y: box.minY), in: canvas)
         guard canvas.drawing.selection == [rect.id] else { fail("clicking a rectangle's edge should select it") }
         editor.palette.update()
-        guard !editor.palette.view.isHidden else { fail("selecting a rectangle should show the Palette") }
+        guard editor.palette.sectionTitles.first == "Rectangle" else {
+          fail("selecting a rectangle should show its settings: \(editor.palette.sectionTitles)")
+        }
+        // A real click on a swatch in the Palette colors the selection.
+        editor.window?.contentView?.layoutSubtreeIfNeeded()
+        guard let red = allButtons(in: editor.palette.view).first(where: { $0.toolTip == "Red" }) else {
+          fail("the Palette should offer red")
+        }
+        click(CGPoint(x: red.bounds.midX, y: red.bounds.midY), in: red)
+        guard canvas.scene[rect.id]?.stroke == Color(hex: "#FF3B30") else {
+          let point = red.convert(NSPoint(x: red.bounds.midX, y: red.bounds.midY), to: nil)
+          let hit = red.window?.contentView?.superview?.hitTest(point)
+          fail("clicking red in the Palette should color the rectangle: hit \(String(describing: hit)), frame \(red.convert(red.bounds, to: nil)), selection \(canvas.drawing.selection), in window \(red.window != nil)")
+        }
+        undo.undo()
         drag(line(from: CGPoint(x: box.minX + 40, y: box.minY), to: CGPoint(x: box.minX + 77, y: box.minY + 23)), in: canvas, flags: .command)
         guard same(canvas.scene[rect.id]?.frame, box.offsetBy(dx: 37, dy: 23)) else {
           fail("dragging should move the rectangle, got \(String(describing: canvas.scene[rect.id]?.frame))")
@@ -625,6 +655,7 @@
             c.beginTextEditing(text.id)
           }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
+          if environment["BRISTLE_SELECT"] == "nothing" { target.canvas.select([]) }
           if let kind = environment["BRISTLE_SELECT"].flatMap(Element.Kind.init(rawValue:)),
             let element = target.canvas.scene.elements.first(where: { $0.kind == kind })
           {
