@@ -174,13 +174,14 @@
           fail("unexpected menus \(menus)")
         }
         let toolbar = windows[0].toolbar?.items.map(\.itemIdentifier.rawValue) ?? []
-        guard toolbar == ["NSToolbarFlexibleSpaceItem", "tools", "NSToolbarFlexibleSpaceItem", "share"],
-          editor.toolGroup?.subitems.map(\.label) == ["Select", "Draw", "Shapes", "Text", "Image"],
+        let tools = editor.toolGroups.flatMap { $0.subitems.map(\.label) }
+        guard toolbar == ["NSToolbarFlexibleSpaceItem", "draw", "shapes", "NSToolbarFlexibleSpaceItem", "share"],
+          tools == ["Select", "Draw", "Eraser", "Fill", "Rectangle", "Ellipse", "Polygon", "Line", "Arrow", "Text", "Image"],
           editor.currentSlot == .select
         else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
-        guard editor.drawBar.bar.isHidden, !editor.zoomBar.bar.isHidden, !editor.canvasBar.bar.isHidden,
-          editor.formatBar.bar.isHidden
-        else { fail("only the zoom and canvas bars should show in a new window") }
+        guard editor.palette.view.isHidden, !editor.zoomBar.bar.isHidden, !editor.canvasBar.bar.isHidden else {
+          fail("only the zoom and canvas bars should show in a new window")
+        }
         controller.newWindowForTab(nil)
         after(1) {
           guard controller.documents.count == 2, windows[0].tabbedWindows?.count == 2 else {
@@ -383,26 +384,19 @@
         let undo = document.undoManager!
         let c = canvas.scene.paperRect.center
 
-        // Draw in the toolbar shows the drawing bar with the last drawing tool; choosing a tool
-        // from its menu uses it, and Draw again goes back to Select.
+        // Each tool is one click in the toolbar; the Palette shows while a tool has settings.
         editor.choose(.draw)
-        guard editor.drawMode, !editor.drawBar.bar.isHidden, DrawBar.drawingTools.contains(canvas.tool) else {
-          fail("Draw should show the drawing bar and pick a drawing tool, not \(canvas.tool)")
+        guard [.pencil, .pen, .highlighter].contains(canvas.tool), !editor.palette.view.isHidden else {
+          fail("Draw should choose a brush and show the Palette, not \(canvas.tool)")
         }
-        guard let brush = editor.drawBar.toolMenu().items.first(where: { ($0.representedObject as? String) == Tool.pen.rawValue })
-        else { fail("the drawing menu should offer the brush") }
-        editor.drawBar.chooseTool(brush)
-        guard canvas.tool == .pen else { fail("choosing Brush should use it") }
-        let select = editor.drawBar.select
-        click(CGPoint(x: select.bounds.midX, y: select.bounds.midY), in: select)
-        guard canvas.tool == .select, !editor.drawBar.bar.isHidden else { fail("Select in the drawing bar should keep drawing") }
-        let toolButton = editor.drawBar.toolButton
-        click(CGPoint(x: toolButton.bounds.midX, y: toolButton.bounds.midY), in: toolButton)
-        guard canvas.tool == .pen else { fail("clicking the drawing tool should return to it") }
+        canvas.tool = .pen
+        editor.choose(.eraser)
+        guard canvas.tool == .eraser, !editor.palette.view.isHidden else { fail("Eraser should choose the eraser") }
+        editor.choose(.select)
+        guard canvas.tool == .select, editor.palette.view.isHidden else { fail("Select with nothing selected should hide the Palette") }
         editor.choose(.draw)
-        guard !editor.drawMode, editor.drawBar.bar.isHidden, canvas.tool == .select else { fail("Draw again should stop drawing") }
-        editor.choose(.draw)
-        pass("Draw in the toolbar shows the drawing bar, whose tools and Select work")
+        guard canvas.tool == .pen else { fail("Draw should return to the brush used last") }
+        pass("each tool is one click in the toolbar, and the Palette shows while it's useful")
 
         // Draw, undo, redo.
         let points = (0...40).map { CGPoint(x: c.x - 200 + CGFloat($0) * 8, y: c.y + sin(CGFloat($0) / 5) * 40) }
@@ -437,9 +431,8 @@
         guard canvas.drawing.selection.isEmpty else { fail("clicking inside an unfilled rectangle shouldn't select it") }
         click(CGPoint(x: box.minX + 40, y: box.minY), in: canvas)
         guard canvas.drawing.selection == [rect.id] else { fail("clicking a rectangle's edge should select it") }
-        guard !editor.formatBar.bar.isHidden, let barFrame = Optional(editor.formatBar.bar.frame),
-          barFrame.minY > (canvas.window?.contentView?.convert(canvas.convert(box, to: nil), from: nil).maxY ?? 0)
-        else { fail("the format bar should appear above the selected rectangle") }
+        editor.palette.update()
+        guard !editor.palette.view.isHidden else { fail("selecting a rectangle should show the Palette") }
         drag(line(from: CGPoint(x: box.minX + 40, y: box.minY), to: CGPoint(x: box.minX + 77, y: box.minY + 23)), in: canvas, flags: .command)
         guard same(canvas.scene[rect.id]?.frame, box.offsetBy(dx: 37, dy: 23)) else {
           fail("dragging should move the rectangle, got \(String(describing: canvas.scene[rect.id]?.frame))")
@@ -564,6 +557,8 @@
         _ = redraw()
         let actual = (0..<5).map { _ in redraw() }.sorted()[2]
         canvas.tool = .pen
+        // Choosing the tool shows the Palette, which redraws the window once; the stroke is timed after.
+        canvas.window?.displayIfNeeded()
         let c = scene.paperRect.center
         var slowest = 0.0
         send(.leftMouseDown, at: c, in: canvas)
@@ -616,9 +611,10 @@
             c.beginTextEditing(text.id)
           }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
-          if environment["BRISTLE_PALETTE"] == "1" {
-            target.choose(.draw)
-            target.drawBar.swatch.performClick(nil)
+          if let kind = environment["BRISTLE_SELECT"].flatMap(Element.Kind.init(rawValue:)),
+            let element = target.canvas.scene.elements.first(where: { $0.kind == kind })
+          {
+            target.canvas.select([element.id])
           }
           _ = canvas
           after(environment["BRISTLE_WAIT"].flatMap(Double.init) ?? 1) {
@@ -628,14 +624,6 @@
             capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), path]
             try? capture.run()
             capture.waitUntilExit()
-            // With the Palette open, capture it too.
-            if let palette = PaletteViewController.current?.contentViewController?.view.window {
-              let popover = Process()
-              popover.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-              popover.arguments = ["-x", "-o", "-l", String(palette.windowNumber), path.replacingOccurrences(of: ".png", with: "-palette.png")]
-              try? popover.run()
-              popover.waitUntilExit()
-            }
             pass("wrote \(path)")
             finish()
           }

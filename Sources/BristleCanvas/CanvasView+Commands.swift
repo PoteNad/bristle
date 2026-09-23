@@ -250,7 +250,14 @@ extension CanvasView: NSMenuItemValidation {
       return
     }
     let previous = toolBeforeEyedropper ?? .pencil
-    styles[previous, default: previous.defaultStyle].stroke = color
+    // The color goes to what was selected when the eyedropper was chosen, or to the tool.
+    if let ids = selectionBeforeEyedropper, !ids.isEmpty {
+      drawing.selection = ids
+      setStyle("Pick Color") { $0.stroke = color }
+    } else {
+      styles[previous, default: previous.defaultStyle].stroke = color
+    }
+    selectionBeforeEyedropper = nil
     tool = previous
     delegate?.canvasView(self, didPick: color)
     delegate?.canvasViewStylesDidChange(self)
@@ -303,7 +310,7 @@ extension CanvasView: NSMenuItemValidation {
 
   /// The menu item's tag picks the alignment, in `Scene.Alignment` order.
   @objc public func alignObjects(_ sender: Any?) {
-    let tag = (sender as? NSMenuItem)?.tag ?? (sender as? NSSegmentedControl)?.selectedTag() ?? 0
+    let tag = (sender as? NSMenuItem)?.tag ?? (sender as? NSButton)?.tag ?? (sender as? NSSegmentedControl)?.selectedTag() ?? 0
     guard Scene.Alignment.allCases.indices.contains(tag) else { return }
     let alignment = Scene.Alignment.allCases[tag]
     arrange("Align") { $0.align($1, alignment) }
@@ -339,6 +346,14 @@ extension CanvasView: NSMenuItemValidation {
     let ids = drawing.selection.filter { scene[$0]?.locked == false }
     guard !ids.isEmpty else { return }
     drawing.edit(name, select: select) { body(&$0, ids) }
+  }
+
+  /// Starts cropping the selected image, as double-clicking it does.
+  @objc public func cropSelectedImage(_ sender: Any?) {
+    guard let image = drawing.selectedElements.first(where: { $0.kind == .image && !$0.locked }) else { return }
+    if tool != .select { tool = .select }
+    editContent(of: image)
+    window?.makeFirstResponder(self)
   }
 
   // MARK: Canvas

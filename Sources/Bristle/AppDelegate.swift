@@ -115,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(edit, "Deselect All", #selector(CanvasView.deselectAll(_:)), "a", modifiers: [.command, .shift])
 
     let format = menu("Format")
-    add(format, "Show Palette", #selector(Editor.showPalette(_:)), "c", modifiers: [.command, .shift])
+    add(format, "Hide Palette", #selector(Editor.togglePalette(_:)), "c", modifiers: [.command, .shift])
     add(format, "Show Fonts", #selector(Editor.showFonts(_:)), "t", modifiers: [.command, .option])
     let bold = add(format, "Bold", #selector(NSFontManager.addFontTrait(_:)), "b", target: NSFontManager.shared)
     bold.tag = Int(NSFontTraitMask.boldFontMask.rawValue)
@@ -170,7 +170,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       item.toolTip = tool.key.isEmpty ? nil : "Press \(tool.key.uppercased()) on the canvas"
       if [.select, .highlighter, .strokeEraser, .arrow, .polygon, .text, .fill].contains(tool) { tools.addItem(.separator()) }
     }
-    add(view, "Draw", #selector(Editor.toggleDraw(_:)))
     view.addItem(.separator())
     add(view, "Zoom In", #selector(CanvasView.zoomIn(_:)), "+")
     add(view, "Zoom Out", #selector(CanvasView.zoomOut(_:)), "-")

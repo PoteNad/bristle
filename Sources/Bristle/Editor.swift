@@ -3,26 +3,23 @@ import BristleCanvas
 import BristleCore
 import UniformTypeIdentifiers
 
-/// A document window, laid out like Freeform's: the tools in the toolbar, the canvas filling the
-/// window, a drawing bar at the bottom while drawing, and a format bar beside the selection.
+/// A document window: every tool in the toolbar, as in Excalidraw, in capsules as in Freeform;
+/// the canvas filling the window; and the Palette at its side while there's something to style.
 @MainActor
 final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, NSToolbarDelegate,
   NSSharingServicePickerToolbarItemDelegate, CanvasViewDelegate
 {
   let canvas: CanvasView
-  let drawBar = DrawBar()
+  let palette = Palette()
   let zoomBar = ZoomBar()
   let canvasBar = CanvasBar()
-  let formatBar = FormatBar()
   private weak var note: BristleDocument?
-  private(set) var toolGroup: NSToolbarItemGroup?
+  private(set) var toolGroups: [NSToolbarItemGroup] = []
   private let root = NSView()
   private var inFullScreenTransition = false
   private var shownOnce = false
-  /// The last shape tool chosen, which the Shapes button shows.
-  private var lastShape: Tool = .rectangle
-  /// While drawing, the drawing bar is shown and the Draw button is on, as in Freeform.
-  private(set) var drawMode = false
+  /// The drawing tool Draw uses: the brush chosen last.
+  private var lastBrush: Tool = .pen
 
   init(document: BristleDocument) {
     note = document
@@ -41,7 +38,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     toolbar.delegate = self
     toolbar.displayMode = .iconOnly
     toolbar.allowsUserCustomization = false
-    toolbar.centeredItemIdentifiers = [Self.toolsItem]
+    toolbar.centeredItemIdentifiers = [Self.drawItems, Self.shapeItems]
     if #available(macOS 15.0, *) { toolbar.allowsDisplayModeCustomization = false }
     window.toolbar = toolbar
     window.toolbarStyle = .unified
@@ -50,36 +47,33 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     canvas.styles = AppPreferences.toolStyles
     canvas.configuration = AppPreferences.canvasConfiguration
     canvas.tool = .select
-    canvas.fitInsets = NSEdgeInsets(top: 24, left: 24, bottom: 64, right: 24)
-    drawBar.canvas = canvas
+    // Fitting the canvas leaves room for the Palette at the left and the bars at the bottom.
+    canvas.fitInsets = NSEdgeInsets(top: 24, left: 248, bottom: 64, right: 24)
+    palette.canvas = canvas
+    palette.isHiddenByUser = UserDefaults.standard.bool(forKey: PreferenceKey.paletteHidden) && !isAutomatedCheck
     zoomBar.canvas = canvas
     canvasBar.canvas = canvas
     canvasBar.editor = self
-    formatBar.canvas = canvas
 
     let scroll = canvas.scrollView
     root.addSubview(scroll)
-    let bottom = [drawBar.bar, zoomBar.bar, canvasBar.bar]
-    bottom.forEach(root.addSubview)
-    root.addSubview(formatBar.bar)
-    for view in [scroll] + bottom { view.translatesAutoresizingMaskIntoConstraints = false }
-    // The format bar is placed by hand beside the selection.
-    formatBar.bar.translatesAutoresizingMaskIntoConstraints = true
-    formatBar.bar.isHidden = true
+    let overlays = [palette.view, zoomBar.bar, canvasBar.bar]
+    overlays.forEach(root.addSubview)
+    for view in [scroll] + overlays { view.translatesAutoresizingMaskIntoConstraints = false }
     let guide = root.safeAreaLayoutGuide
     NSLayoutConstraint.activate([
       scroll.topAnchor.constraint(equalTo: root.topAnchor),
       scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
       scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
       scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-      drawBar.bar.centerXAnchor.constraint(equalTo: guide.centerXAnchor),
-      drawBar.bar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
+      palette.view.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 12),
+      palette.view.topAnchor.constraint(equalTo: guide.topAnchor, constant: 12),
+      palette.view.bottomAnchor.constraint(lessThanOrEqualTo: zoomBar.bar.topAnchor, constant: -12),
       zoomBar.bar.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: 16),
       zoomBar.bar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
       canvasBar.bar.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -16),
       canvasBar.bar.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -16),
     ])
-    drawBar.bar.isHidden = true
     let controller = NSViewController()
     controller.view = root
     window.contentViewController = controller
@@ -89,10 +83,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     let center = NotificationCenter.default
     center.addObserver(self, selector: #selector(defaultsDidChange), name: .canvasDefaultsDidChange, object: nil)
     center.addObserver(self, selector: #selector(stylesChangedElsewhere), name: .toolStylesDidChange, object: nil)
-    center.addObserver(self, selector: #selector(placeFormatBar), name: .drawingDidChange, object: document.drawing)
-    center.addObserver(self, selector: #selector(selectionChanged), name: .drawingSelectionDidChange, object: document.drawing)
-    scroll.contentView.postsBoundsChangedNotifications = true
-    center.addObserver(self, selector: #selector(placeFormatBar), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    center.addObserver(self, selector: #selector(drawingChanged), name: .drawingDidChange, object: document.drawing)
+    center.addObserver(self, selector: #selector(drawingChanged), name: .drawingSelectionDidChange, object: document.drawing)
     window.makeFirstResponder(canvas)
   }
 
@@ -143,7 +135,6 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   func window(_ window: NSWindow, didDecodeRestorableState state: NSCoder) { placeWindow() }
 
   func windowDidResize(_ notification: Notification) {
-    placeFormatBar()
     guard !inFullScreenTransition, let window, window.isVisible, !window.styleMask.contains(.fullScreen) else {
       return
     }
@@ -170,40 +161,27 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   // MARK: Canvas events
 
   func canvasViewToolDidChange(_ canvas: CanvasView) {
-    let tool = canvas.tool
-    // Choosing a drawing tool, by key or menu, starts drawing; a shape or text ends it.
-    if DrawBar.drawingTools.contains(tool) {
-      drawMode = true
-    } else if tool != .select {
-      drawMode = false
-    }
-    if [.rectangle, .ellipse, .polygon, .line, .arrow].contains(tool) { lastShape = tool }
+    if [.pencil, .pen, .highlighter].contains(canvas.tool) { lastBrush = canvas.tool }
     updateBars()
   }
 
-  func canvasViewZoomDidChange(_ canvas: CanvasView) {
-    zoomBar.update()
-    placeFormatBar()
-  }
+  func canvasViewZoomDidChange(_ canvas: CanvasView) { zoomBar.update() }
 
-  func canvasView(_ canvas: CanvasView, didPick color: Color) {
-    PaletteViewController.remember(color)
-    drawBar.update()
-  }
+  func canvasView(_ canvas: CanvasView, didPick color: Color) { palette.update() }
 
   func canvasViewStylesDidChange(_ canvas: CanvasView) {
     AppPreferences.toolStyles = canvas.styles
-    drawBar.update()
+    palette.update()
     NotificationCenter.default.post(name: .toolStylesDidChange, object: self)
   }
 
-  func canvasViewDidFinishInteraction(_ canvas: CanvasView) { placeFormatBar() }
+  func canvasViewDidFinishInteraction(_ canvas: CanvasView) { palette.update() }
 
   /// Every window shares one set of tool styles.
   @objc private func stylesChangedElsewhere(_ notification: Notification) {
     guard notification.object as AnyObject? !== self else { return }
     canvas.styles = AppPreferences.toolStyles
-    drawBar.update()
+    palette.update()
   }
 
   @objc private func defaultsDidChange() {
@@ -211,56 +189,43 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     canvasBar.update()
   }
 
-  @objc private func selectionChanged() {
-    formatBar.update()
-    placeFormatBar()
+  private var paletteScheduled = false
+
+  /// The Palette follows the drawing, at most once per turn of the run loop.
+  @objc private func drawingChanged() {
+    guard !paletteScheduled else { return }
+    paletteScheduled = true
+    DispatchQueue.main.async { [weak self] in
+      MainActor.assumeIsolated {
+        self?.paletteScheduled = false
+        self?.palette.update()
+      }
+    }
   }
 
   private func updateBars() {
-    drawBar.bar.isHidden = !drawMode
-    drawBar.update()
+    palette.update()
     zoomBar.update()
     canvasBar.update()
-    updateToolGroup()
-    formatBar.update()
-    placeFormatBar()
-  }
-
-  /// Puts the format bar above the selection, or below it when there's no room above, and hides
-  /// it while the selection is being changed with the pointer.
-  @objc func placeFormatBar() {
-    let bar = formatBar.bar
-    let selected = canvas.drawing.selectedElements.filter { !$0.locked }
-    guard !selected.isEmpty, canvas.tool == .select, !canvas.isInteracting, !canvas.isEditingText,
-      let box = canvas.selectionBounds
-    else {
-      bar.isHidden = true
-      return
-    }
-    formatBar.update()
-    let size = bar.fittingSize
-    let rect = root.convert(canvas.convert(box, to: nil), from: nil)
-    let visible = root.bounds
-    let top = visible.maxY - root.safeAreaInsets.top
-    var origin = CGPoint(x: rect.midX - size.width / 2, y: rect.maxY + 16)
-    if origin.y + size.height > top - 8 { origin.y = rect.minY - size.height - 16 }
-    origin.x = min(max(origin.x, visible.minX + 12), visible.maxX - size.width - 12)
-    origin.y = min(max(origin.y, visible.minY + 64), top - size.height - 8)
-    bar.frame = NSRect(origin: origin, size: size).integral
-    bar.isHidden = false
+    updateToolGroups()
   }
 
   // MARK: Toolbar
 
+  static let drawItems = NSToolbarItem.Identifier("draw")
+  static let shapeItems = NSToolbarItem.Identifier("shapes")
   static let shareToolbarItem = NSToolbarItem.Identifier("share")
 
-  /// The tools in the toolbar, in order.
-  enum Slot: String, CaseIterable { case select, draw, shapes, text, image }
+  /// The tools in the toolbar, in two capsules: drawing, then shapes, text, and images.
+  enum Slot: Int, CaseIterable {
+    case select, draw, eraser, fill, rectangle, ellipse, polygon, line, arrow, text, image
 
-  static let toolsItem = NSToolbarItem.Identifier("tools")
+    static let drawing: [Slot] = [.select, .draw, .eraser, .fill]
+    static let shapes: [Slot] = [.rectangle, .ellipse, .polygon, .line, .arrow, .text, .image]
+  }
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-    [.flexibleSpace, Self.toolsItem, .flexibleSpace, Self.shareToolbarItem]
+    [.flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, Self.shareToolbarItem]
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -269,11 +234,17 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   private func slotDetails(_ slot: Slot) -> (symbol: String, label: String, tip: String) {
     switch slot {
-    case .select: ("cursorarrow", "Select", "Select and move objects (V)")
-    case .draw: ("pencil.tip.crop.circle", "Draw", "Draw with a pencil, brush, or highlighter (P)")
-    case .shapes: (lastShape.symbol, "Shapes", "Draw shapes, lines, and arrows; click again for more")
-    case .text: ("textformat", "Text", "Add text (T)")
-    case .image: ("photo", "Image", "Insert an image (⇧⌘I)")
+    case .select: ("cursorarrow", "Select", "Select (V)")
+    case .draw: (lastBrush.symbol, "Draw", "Draw (P) — choose a pencil, brush, or highlighter in the Palette")
+    case .eraser: ("eraser", "Eraser", "Eraser (E)")
+    case .fill: ("drop", "Fill", "Fill (F)")
+    case .rectangle: ("rectangle", "Rectangle", "Rectangle (R)")
+    case .ellipse: ("circle", "Ellipse", "Ellipse (O)")
+    case .polygon: ("pentagon", "Polygon", "Polygon (G)")
+    case .line: ("line.diagonal", "Line", "Line (L)")
+    case .arrow: ("arrow.up.right", "Arrow", "Arrow (A)")
+    case .text: ("textformat", "Text", "Text (T)")
+    case .image: ("photo", "Image", "Insert Image (⇧⌘I)")
     }
   }
 
@@ -281,10 +252,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   /// as Freeform marks its drawing tool.
   private func slotImage(_ slot: Slot, on: Bool) -> NSImage? {
     let details = slotDetails(slot)
-    guard let symbol = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
-      .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
-    else { return nil }
-    guard on else { return NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label) }
+    let plain = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)
+    guard on, let symbol = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
+      .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+    else { return plain }
     let side: CGFloat = 24
     let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
       NSColor.black.setFill()
@@ -312,105 +283,81 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       item.delegate = self
       return item
     }
-    guard itemIdentifier == Self.toolsItem else { return nil }
-    // One group, so the tools share a capsule in the middle of the toolbar as Freeform's do.
-    let slots = Slot.allCases
+    let slots: [Slot]
+    switch itemIdentifier {
+    case Self.drawItems: slots = Slot.drawing
+    case Self.shapeItems: slots = Slot.shapes
+    default: return nil
+    }
     let group = NSToolbarItemGroup(
       itemIdentifier: itemIdentifier, images: slots.map { slotImage($0, on: false)! }, selectionMode: .momentary,
       labels: slots.map { slotDetails($0).label }, target: self, action: #selector(chooseSlot(_:)))
-    group.label = "Tools"
-    group.paletteLabel = "Tools"
+    group.label = itemIdentifier == Self.drawItems ? "Draw" : "Shapes"
+    group.paletteLabel = group.label
     for (item, slot) in zip(group.subitems, slots) {
       item.toolTip = slotDetails(slot).tip
-      item.target = self
-      item.action = #selector(chooseSlotItem(_:))
-      item.tag = Slot.allCases.firstIndex(of: slot) ?? 0
+      item.tag = slot.rawValue
     }
-    toolGroup = group
-    DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.updateToolGroup() } }
+    if let control = group.view as? NSSegmentedControl {
+      for (i, slot) in slots.enumerated() { control.setToolTip(slotDetails(slot).tip, forSegment: i) }
+    }
+    toolGroups.append(group)
+    DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.updateToolGroups() } }
     return group
   }
 
-  func shapesMenu() -> NSMenu {
-    let menu = NSMenu(title: "Shapes")
-    for tool in [Tool.rectangle, .ellipse, .polygon, .line, .arrow] {
-      if tool == .line { menu.addItem(.separator()) }
-      let item = menu.addItem(withTitle: tool.title, action: #selector(chooseTool(_:)), keyEquivalent: "")
-      item.representedObject = tool.rawValue
-      item.image = NSImage(systemSymbolName: tool.symbol, accessibilityDescription: nil)
-      item.target = self
-    }
-    return menu
-  }
-
   var currentSlot: Slot? {
-    let tool = canvas.tool
-    if drawMode { return .draw }
-    if tool == .select { return .select }
-    if tool == .text { return .text }
-    if [.rectangle, .ellipse, .polygon, .line, .arrow].contains(tool) { return .shapes }
-    return nil
+    switch canvas.tool {
+    case .select: .select
+    case .pencil, .pen, .highlighter: .draw
+    case .eraser, .strokeEraser: .eraser
+    case .fill: .fill
+    case .rectangle: .rectangle
+    case .ellipse: .ellipse
+    case .polygon: .polygon
+    case .line: .line
+    case .arrow: .arrow
+    case .text: .text
+    case .eyedropper: nil
+    }
   }
 
   /// Shows which tool is in use in the toolbar.
-  private func updateToolGroup() {
-    guard let group = toolGroup else { return }
+  private func updateToolGroups() {
     let current = currentSlot
-    for (item, slot) in zip(group.subitems, Slot.allCases) {
-      item.image = slotImage(slot, on: slot == current)
-    }
-    if let control = group.view as? NSSegmentedControl {
-      for (i, slot) in Slot.allCases.enumerated() { control.setImage(slotImage(slot, on: slot == current), forSegment: i) }
+    for group in toolGroups {
+      let slots = group.itemIdentifier == Self.drawItems ? Slot.drawing : Slot.shapes
+      for (i, (item, slot)) in zip(group.subitems, slots).enumerated() {
+        let image = slotImage(slot, on: slot == current)
+        item.image = image
+        (group.view as? NSSegmentedControl)?.setImage(image, forSegment: i)
+      }
     }
   }
 
   @objc private func chooseSlot(_ sender: NSToolbarItemGroup) {
+    let slots = sender.itemIdentifier == Self.drawItems ? Slot.drawing : Slot.shapes
     let index = (sender.view as? NSSegmentedControl)?.selectedSegment ?? -1
-    choose(Slot.allCases.indices.contains(index) ? Slot.allCases[index] : nil, from: sender)
+    guard slots.indices.contains(index) else { return }
+    choose(slots[index], from: sender)
   }
 
-  @objc private func chooseSlotItem(_ sender: NSToolbarItem) {
-    choose(Slot.allCases.indices.contains(sender.tag) ? Slot.allCases[sender.tag] : nil, from: sender)
-  }
-
-  func choose(_ slot: Slot?, from sender: Any? = nil) {
+  func choose(_ slot: Slot, from sender: Any? = nil) {
     switch slot {
-    case .select:
-      drawMode = false
-      canvas.tool = .select
-    case .draw:
-      toggleDraw(sender)
-      return
-    case .shapes:
-      // Shapes uses the last shape; clicking it again offers the others.
-      if currentSlot == .shapes, let view = toolGroup?.view {
-        let width = view.bounds.width / CGFloat(Slot.allCases.count)
-        shapesMenu().popUp(positioning: nil, at: NSPoint(x: width * 2, y: view.bounds.height + 4), in: view)
-      } else {
-        drawMode = false
-        canvas.tool = lastShape
-      }
-    case .text:
-      drawMode = false
-      canvas.tool = .text
-    case .image:
-      insertImage(sender)
-    case nil: break
+    case .select: canvas.tool = .select
+    case .draw: canvas.tool = lastBrush
+    case .eraser: if canvas.tool != .strokeEraser { canvas.tool = .eraser }
+    case .fill: canvas.tool = .fill
+    case .rectangle: canvas.tool = .rectangle
+    case .ellipse: canvas.tool = .ellipse
+    case .polygon: canvas.tool = .polygon
+    case .line: canvas.tool = .line
+    case .arrow: canvas.tool = .arrow
+    case .text: canvas.tool = .text
+    case .image: insertImage(sender)
     }
     updateBars()
     window?.makeFirstResponder(canvas)
-  }
-
-  /// Draw starts drawing with the last drawing tool, or stops, returning to Select.
-  @objc func toggleDraw(_ sender: Any?) {
-    if drawMode {
-      drawMode = false
-      canvas.tool = .select
-    } else {
-      drawMode = true
-      canvas.tool = drawBar.lastTool
-    }
-    updateBars()
   }
 
   @objc func chooseTool(_ sender: NSMenuItem) {
@@ -444,20 +391,11 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     NotificationCenter.default.post(name: .canvasDefaultsDidChange, object: nil)
   }
 
-  /// Format ▸ Show Palette opens the Palette for the selection, or the current tool.
-  @objc func showPalette(_ sender: Any?) {
-    if !formatBar.bar.isHidden, let swatch = formatBar.bar.row.arrangedSubviews.last(where: { $0 is SwatchButton }) {
-      (swatch as? NSButton)?.performClick(sender)
-    } else if !drawBar.bar.isHidden {
-      drawBar.swatch.performClick(sender)
-    } else {
-      let tool = canvas.tool
-      let target = PaletteTarget(title: "\(tool.title) Color", color: canvas.style.stroke) { [weak self] color in
-        guard let self, let color else { return }
-        self.canvas.setStyle("Change Color") { $0.stroke = color }
-      }
-      PaletteViewController.show(target, relativeTo: canvasBar.options, edge: .maxY)
-    }
+  /// Format ▸ Show Palette shows or hides the Palette beside the canvas.
+  @objc func togglePalette(_ sender: Any?) {
+    palette.isHiddenByUser.toggle()
+    if !isAutomatedCheck { UserDefaults.standard.set(palette.isHiddenByUser, forKey: PreferenceKey.paletteHidden) }
+    palette.update()
   }
 
   @objc func showFonts(_ sender: Any?) {
@@ -537,8 +475,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
     let defaults = UserDefaults.standard
     switch menuItem.action {
-    case #selector(toggleDraw(_:)):
-      menuItem.state = drawMode ? .on : .off
+    case #selector(togglePalette(_:)):
+      menuItem.title = palette.isHiddenByUser ? "Show Palette" : "Hide Palette"
     case #selector(toggleGrid(_:)):
       menuItem.state = defaults.bool(forKey: PreferenceKey.showsGrid) ? .on : .off
     case #selector(toggleSnapToGrid(_:)):

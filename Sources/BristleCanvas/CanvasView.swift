@@ -53,6 +53,7 @@ public final class CanvasView: NSView {
       guard tool != oldValue else { return }
       if tool != .eyedropper { toolBeforeEyedropper = nil } else if toolBeforeEyedropper == nil {
         toolBeforeEyedropper = oldValue
+        selectionBeforeEyedropper = drawing.selection
       }
       finishInteraction()
       if tool != .select {
@@ -60,11 +61,16 @@ public final class CanvasView: NSView {
         croppingID = nil
         pointEditingID = nil
       }
+      // Drawing tools start fresh, as in Freeform and Excalidraw: the selection is let go.
+      if tool != .select && tool != .eyedropper && oldValue != .eyedropper {
+        drawing.selection = []
+      }
       window?.invalidateCursorRects(for: self)
       delegate?.canvasViewToolDidChange(self)
     }
   }
   var toolBeforeEyedropper: Tool?
+  var selectionBeforeEyedropper: Set<String>?
 
   /// The style each tool gives new elements.
   public var styles: [Tool: Style] = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0, $0.defaultStyle) })
@@ -95,6 +101,8 @@ public final class CanvasView: NSView {
   var lastPasteSource: Int?
   /// VoiceOver's view of each element, made when asked for and kept while the element exists.
   var accessibilityProxies: [String: ElementAccessibility] = [:]
+  /// Where the selection box was last drawn, so moving it clears the old place.
+  var lastSelectionRect: CGRect?
 
   public init(drawing: Drawing) {
     self.drawing = drawing
@@ -198,10 +206,17 @@ public final class CanvasView: NSView {
     if drawing.selection.contains(element.id) || !drawing.selection.isEmpty { invalidateSelectionBox() }
   }
 
+  /// Redraws where the selection box and its handles are, and where they were last drawn.
   func invalidateSelectionBox() {
-    guard let box = selectionBox() else { return }
     let margin = 40 / magnification
-    setNeedsDisplay(CGRect(boundingPoints: box.corners).insetBy(dx: -margin, dy: -margin))
+    if let last = lastSelectionRect { setNeedsDisplay(last) }
+    guard let box = selectionBox() else {
+      lastSelectionRect = nil
+      return
+    }
+    let rect = CGRect(boundingPoints: box.corners).insetBy(dx: -margin, dy: -margin)
+    setNeedsDisplay(rect)
+    lastSelectionRect = rect
   }
 
   // MARK: Drawing
@@ -306,23 +321,20 @@ public final class CanvasView: NSView {
       }
     }
     if configuration.showsGrid {
+      // A grid of dots, as Freeform draws, over the paper.
       var spacing = configuration.gridSpacing
-      while spacing * scale < 8 { spacing *= 2 }
-      context.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.14).cgColor)
-      context.setLineWidth(1 / scale)
-      var x = (visible.minX / spacing).rounded(.up) * spacing
-      while x < visible.maxX {
-        context.move(to: CGPoint(x: x, y: visible.minY))
-        context.addLine(to: CGPoint(x: x, y: visible.maxY))
-        x += spacing
-      }
+      while spacing * scale < 12 { spacing *= 2 }
+      let dot = max(1.2 / scale, 0.3)
+      context.setFillColor(NSColor.tertiaryLabelColor.cgColor)
       var y = (visible.minY / spacing).rounded(.up) * spacing
-      while y < visible.maxY {
-        context.move(to: CGPoint(x: visible.minX, y: y))
-        context.addLine(to: CGPoint(x: visible.maxX, y: y))
+      while y <= visible.maxY {
+        var x = (visible.minX / spacing).rounded(.up) * spacing
+        while x <= visible.maxX {
+          context.fillEllipse(in: CGRect(x: x - dot, y: y - dot, width: dot * 2, height: dot * 2))
+          x += spacing
+        }
         y += spacing
       }
-      context.strokePath()
     }
   }
 
