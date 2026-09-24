@@ -4,7 +4,7 @@ import BristleCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-  private lazy var settingsController = SettingsWindowController()
+  private(set) lazy var settingsController = SettingsWindowController()
   private let recentMenu = NSMenu(title: "Open Recent")
 
   // Menus are built before windows are restored or opened, so the menu bar is never empty
@@ -154,21 +154,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(arrange, "Group", #selector(CanvasView.group(_:)), "g", modifiers: [.command, .option])
     add(arrange, "Ungroup", #selector(CanvasView.ungroup(_:)), "g", modifiers: [.command, .option, .shift])
 
+    // The canvas's size and colour, as MS Paint's Image menu has them.
     let canvas = menu("Canvas")
-    add(canvas, "Add Frame", #selector(CanvasView.toggleFrame(_:)))
-    add(canvas, "Frame Size…", #selector(Editor.showFrameSize(_:)))
-    add(canvas, "Frame Selection", #selector(CanvasView.cropToSelection(_:)), "k")
-    add(canvas, "Fit Frame to Drawing", #selector(CanvasView.fitCanvasToDrawing(_:)))
+    add(canvas, "Canvas Size…", #selector(Editor.showCanvasSize(_:)), "r", modifiers: [.command, .option])
+    add(canvas, "Crop to Selection", #selector(CanvasView.cropToSelection(_:)), "k")
+    add(canvas, "Fit Canvas to Drawing", #selector(CanvasView.fitCanvasToDrawing(_:)))
     canvas.addItem(.separator())
     let background = submenu(canvas, "Background")
-    add(background, "None", #selector(Editor.chooseBackground(_:)), tag: 0)
     add(background, "White", #selector(Editor.chooseBackground(_:)), tag: 1)
-    add(background, "Color…", #selector(Editor.chooseBackground(_:)), tag: 2)
+    add(background, "Transparent", #selector(Editor.chooseBackground(_:)), tag: 0)
+    add(background, "Other Color…", #selector(Editor.chooseBackground(_:)), tag: 2)
     canvas.addItem(.separator())
-    add(canvas, "Rotate Drawing Left", #selector(CanvasView.rotateCanvasLeft(_:)))
-    add(canvas, "Rotate Drawing Right", #selector(CanvasView.rotateCanvasRight(_:)))
-    add(canvas, "Flip Drawing Horizontally", #selector(CanvasView.flipCanvasHorizontal(_:)))
-    add(canvas, "Flip Drawing Vertically", #selector(CanvasView.flipCanvasVertical(_:)))
+    add(canvas, "Rotate Canvas Left", #selector(CanvasView.rotateCanvasLeft(_:)))
+    add(canvas, "Rotate Canvas Right", #selector(CanvasView.rotateCanvasRight(_:)))
+    add(canvas, "Flip Canvas Horizontally", #selector(CanvasView.flipCanvasHorizontal(_:)))
+    add(canvas, "Flip Canvas Vertically", #selector(CanvasView.flipCanvasVertical(_:)))
 
     let view = menu("View")
     let tools = submenu(view, "Tool")

@@ -6,7 +6,8 @@ import BristleCore
 /// inspector. It has everything the bar at the bottom has, and more: for what's drawn next or
 /// what's selected, a Style tab with every colour, brush, line, and text setting, and an Arrange
 /// tab with the exact position, size, and turn, layers, alignment, and actions; with nothing
-/// selected, the canvas: how selecting works, the frame, the background, the grid, and rulers.
+/// selected, the canvas: how selecting works, its size, and its background. How the window shows
+/// things, such as the grid and rulers, is in the View menu and Settings.
 @MainActor
 final class Palette: NSViewController {
   enum Tab: Int { case style, arrange }
@@ -72,7 +73,7 @@ final class Palette: NSViewController {
 
   func update() {
     guard isViewLoaded, canvas != nil else { return }
-    let key = controls.key + "|\(tab)|\(canvas?.scene.frame != nil)"
+    let key = controls.key + "|\(tab)"
     if key != builtFor {
       builtFor = key
       rebuild()
@@ -198,7 +199,7 @@ final class Palette: NSViewController {
       }
       return button
     }
-    return grid(buttons, columns: 5)
+    return ButtonGrid(buttons, columns: 5)
   }
 
   /// MS Paint's shapes, and placing corners one click at a time.
@@ -212,7 +213,7 @@ final class Palette: NSViewController {
       c.onRefresh { [weak c, weak button] in button?.isOn = c?.canvas?.shapePreset == preset }
       return button
     }
-    return grid(buttons, columns: 6)
+    return ButtonGrid(buttons, columns: 6)
   }
 
   private func widthControl() -> NSView {
@@ -336,22 +337,22 @@ final class Palette: NSViewController {
       guard let c, let canvas = c.canvas else { return .null }
       return canvas.scene.frameBounds(of: Set(c.elements.map(\.id)))
     }
-    let origin = canvas.scene.frame?.origin ?? .zero
+    // From the canvas's top left corner, as the rulers measure.
     c.onRefresh {
       let b = box()
       guard !b.isNull else { return }
-      for (field, value) in [(x, b.minX - origin.x), (y, b.minY - origin.y), (w, b.width), (h, b.height)] where field.currentEditor() == nil {
+      for (field, value) in [(x, b.minX), (y, b.minY), (w, b.width), (h, b.height)] where field.currentEditor() == nil {
         field.doubleValue = Double(value.rounded())
       }
     }
     let ids = Set(elements.map(\.id))
     c.wire(x) { [weak canvas] _ in
       let b = box()
-      canvas?.drawing.edit("Move") { $0.move(ids, dx: CGFloat(x.doubleValue) + origin.x - b.minX, dy: 0) }
+      canvas?.drawing.edit("Move") { $0.move(ids, dx: CGFloat(x.doubleValue) - b.minX, dy: 0) }
     }
     c.wire(y) { [weak canvas] _ in
       let b = box()
-      canvas?.drawing.edit("Move") { $0.move(ids, dx: 0, dy: CGFloat(y.doubleValue) + origin.y - b.minY) }
+      canvas?.drawing.edit("Move") { $0.move(ids, dx: 0, dy: CGFloat(y.doubleValue) - b.minY) }
     }
     for field in [w, h] {
       c.wire(field) { [weak canvas] _ in
@@ -363,6 +364,7 @@ final class Palette: NSViewController {
     let position = NSGridView(views: [[label("X"), x, label("Y"), y], [label("W"), w, label("H"), h]])
     position.rowSpacing = 8
     position.columnSpacing = 6
+    position.rowAlignment = .firstBaseline
     section("Position and Size", position, fill: false)
     if let single, !single.isLinear {
       let turn = numberField("Rotation")
@@ -387,7 +389,7 @@ final class Palette: NSViewController {
       ("square.2.layers.3d.bottom.filled", "Send Backward", #selector(CanvasView.sendBackward(_:))),
       ("square.3.layers.3d.bottom.filled", "Send to Back", #selector(CanvasView.sendToBack(_:))),
     ]), fill: false)
-    section("Align", buttons([
+    section(elements.count == 1 ? "Align to Canvas" : "Align", buttons([
       ("align.horizontal.left", "Align Left", #selector(CanvasView.alignObjects(_:))),
       ("align.horizontal.center", "Align Center", #selector(CanvasView.alignObjects(_:))),
       ("align.horizontal.right", "Align Right", #selector(CanvasView.alignObjects(_:))),
@@ -431,7 +433,7 @@ final class Palette: NSViewController {
 
   // MARK: Canvas
 
-  /// With nothing selected: how selecting works, the frame, the background, the grid, and rulers.
+  /// With nothing selected: how selecting works, and the canvas's size and background.
   private func canvasSections() {
     guard let canvas else { return }
     let c = controls
@@ -441,53 +443,51 @@ final class Palette: NSViewController {
         selected: { canvas.lassoSelects ? 1 : 0 }
       ) { [weak canvas] i in canvas?.lassoSelects = i == 1 })
     }
-    if let frame = canvas.scene.frame {
-      let w = numberField("Frame width"), h = numberField("Frame height")
-      c.onRefresh { [weak canvas] in
-        guard let frame = canvas?.scene.frame else { return }
-        if w.currentEditor() == nil { w.doubleValue = Double(frame.width) }
-        if h.currentEditor() == nil { h.doubleValue = Double(frame.height) }
-      }
-      for field in [w, h] {
-        c.wire(field) { [weak canvas] _ in
-          let size = CGSize(width: max(1, w.doubleValue), height: max(1, h.doubleValue))
-          canvas?.drawing.edit("Frame Size") { $0.resizeFrame(to: size) }
-        }
-      }
-      _ = frame
-      let size = NSGridView(views: [[label("W"), w, label("H"), h]])
-      size.columnSpacing = 6
-      let fit = NSButton(title: "Fit to Drawing", target: canvas, action: #selector(CanvasView.fitCanvasToDrawing(_:)))
-      let remove = NSButton(title: "Remove", target: canvas, action: #selector(CanvasView.removeFrame(_:)))
-      for button in [fit, remove] { button.controlSize = .small }
-      let column = NSStackView(views: [size, row(fit, remove)])
-      column.orientation = .vertical
-      column.alignment = .leading
-      column.spacing = 8
-      section("Frame", column, fill: false)
-    } else {
-      let add = NSButton(title: "Add Frame", target: canvas, action: #selector(CanvasView.addFrame(_:)))
-      add.controlSize = .small
-      section("Frame", add, fill: false)
+    // The size, as MS Paint's Resize sets it: the drawing stays at the top left.
+    let w = numberField("Canvas width"), h = numberField("Canvas height")
+    c.onRefresh { [weak canvas] in
+      guard let size = canvas?.scene.paper.size else { return }
+      if w.currentEditor() == nil { w.doubleValue = Double(size.width) }
+      if h.currentEditor() == nil { h.doubleValue = Double(size.height) }
     }
+    for field in [w, h] {
+      c.wire(field) { [weak canvas] _ in
+        guard let canvas else { return }
+        let size = CGSize(width: max(1, w.doubleValue), height: max(1, h.doubleValue))
+        guard size != canvas.scene.paper.size else { return }
+        canvas.resizeCanvas(to: size, anchor: .topLeft)
+      }
+    }
+    let size = NSGridView(views: [[label("W"), w, label("H"), h]])
+    size.columnSpacing = 6
+    size.rowAlignment = .firstBaseline
+    let presets = NSPopUpButton(frame: .zero, pullsDown: true)
+    presets.controlSize = .small
+    presets.addItem(withTitle: "Sizes")
+    for preset in CanvasSize.allCases {
+      presets.addItem(withTitle: preset.title)
+      presets.lastItem?.representedObject = preset.rawValue
+    }
+    presets.setAccessibilityLabel("Canvas sizes")
+    c.wire(presets) { [weak canvas] sender in
+      guard let item = (sender as? NSPopUpButton)?.selectedItem, let name = item.representedObject as? String,
+        let preset = CanvasSize(rawValue: name)
+      else { return }
+      canvas?.resizeCanvas(to: preset.size, anchor: .topLeft)
+    }
+    let fit = NSButton(title: "Fit to Drawing", target: canvas, action: #selector(CanvasView.fitCanvasToDrawing(_:)))
+    fit.controlSize = .small
+    fit.toolTip = "Make the canvas just big enough for what's drawn"
+    let column = NSStackView(views: [size, row(presets, fit)])
+    column.orientation = .vertical
+    column.alignment = .leading
+    column.spacing = 8
+    section("Canvas Size", column, fill: false)
+    c.noneTitle = "Transparent"
     section("Background", c.colorRow(Controls.fills, allowsNone: true, value: { [weak c] in c?.background }) {
       [weak c] color, live in c?.setBackground(color, live: live)
     })
-    let options: [(String, String)] = [
-      ("Show Grid", PreferenceKey.showsGrid), ("Snap to Grid", PreferenceKey.snapsToGrid),
-      ("Snap to Guides", PreferenceKey.snapsToGuides), ("Show Rulers", PreferenceKey.showsRulers),
-    ]
-    let boxes: [NSView] = options.map { title, key in
-      let box = NSButton(checkboxWithTitle: title, target: nil, action: nil)
-      c.wire(box) { [weak self] _ in self?.editor?.flip(key) }
-      c.onRefresh { [weak box] in box?.state = UserDefaults.standard.bool(forKey: key) ? .on : .off }
-      return box
-    }
-    let column = NSStackView(views: boxes)
-    column.orientation = .vertical
-    column.alignment = .leading
-    column.spacing = 6
-    section("Grid and Rulers", column, fill: false)
+    c.noneTitle = "None"
   }
 
   // MARK: Building
@@ -529,17 +529,6 @@ final class Palette: NSViewController {
     section.spacing = 6
     full(section)
     if fill { control.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true }
-  }
-
-  private func grid(_ views: [NSView], columns: Int) -> NSView {
-    var rows: [[NSView]] = stride(from: 0, to: views.count, by: columns).map { Array(views[$0..<min($0 + columns, views.count)]) }
-    if let last = rows.indices.last, rows[last].count < columns {
-      rows[last] += Array(repeating: NSGridCell.emptyContentView, count: columns - rows[last].count)
-    }
-    let grid = NSGridView(views: rows)
-    grid.rowSpacing = 4
-    grid.columnSpacing = 4
-    return grid
   }
 
   private func buttons(_ items: [(String, String, Selector)], tags: Bool = false) -> NSView {
@@ -587,5 +576,45 @@ final class Palette: NSViewController {
     field.setAccessibilityLabel(name)
     field.widthAnchor.constraint(equalToConstant: 68).isActive = true
     return field
+  }
+}
+
+/// Buttons of one size in rows, spread evenly across the width, so none moves when another is
+/// chosen.
+final class ButtonGrid: NSView {
+  private let buttons: [NSView]
+  private let columns: Int
+  static let cell: CGFloat = 32
+  static let rowSpacing: CGFloat = 4
+
+  init(_ buttons: [NSView], columns: Int) {
+    self.buttons = buttons
+    self.columns = max(1, columns)
+    super.init(frame: .zero)
+    translatesAutoresizingMaskIntoConstraints = false
+    for button in buttons {
+      button.translatesAutoresizingMaskIntoConstraints = true
+      addSubview(button)
+    }
+  }
+
+  required init?(coder: NSCoder) { fatalError() }
+
+  override var isFlipped: Bool { true }
+
+  private var rows: Int { (buttons.count + columns - 1) / columns }
+
+  override var intrinsicContentSize: NSSize {
+    NSSize(width: NSView.noIntrinsicMetric, height: CGFloat(rows) * Self.cell + CGFloat(max(0, rows - 1)) * Self.rowSpacing)
+  }
+
+  override func layout() {
+    super.layout()
+    let cell = Self.cell
+    let spacing = columns > 1 ? max(0, (bounds.width - CGFloat(columns) * cell) / CGFloat(columns - 1)) : 0
+    for (i, button) in buttons.enumerated() {
+      let row = i / columns, column = i % columns
+      button.frame = NSRect(x: (CGFloat(column) * (cell + spacing)).rounded(), y: CGFloat(row) * (cell + Self.rowSpacing), width: cell, height: cell)
+    }
   }
 }

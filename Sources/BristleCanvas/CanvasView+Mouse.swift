@@ -19,8 +19,8 @@ enum Interaction {
   case cropping(handle: Int, box: SelectionBox, original: Element)
   case erasing(path: [CGPoint], strokes: Bool)
   case textBox(start: CGPoint, current: CGPoint)
-  case frameMoving(start: CGPoint, original: CGRect)
-  case frameResizing(handle: Int, original: CGRect)
+  /// Dragging the canvas's right edge (3), corner (4), or bottom edge (5).
+  case canvasResizing(edge: Int, original: CGSize)
 }
 
 extension CanvasView {
@@ -31,7 +31,7 @@ extension CanvasView {
     let grid = configuration.snapsToGrid ? configuration.gridSpacing : nil
     guard !event.modifierFlags.contains(.command), configuration.snapsToGuides || grid != nil else { return nil }
     let near = scrollView.documentVisibleRect.insetBy(dx: -200 / magnification, dy: -200 / magnification)
-    var targets = scene.frame.map { [$0] } ?? []
+    var targets = [scene.canvas]
     for element in scene.elements where !ids.contains(element.id) {
       let box = element.rotation == 0 ? element.frame : element.bounds
       if box.intersects(near) { targets.append(box) }
@@ -55,6 +55,11 @@ extension CanvasView {
       return
     }
     let tool = tabletEraser ? Tool.eraser : self.tool
+    // The canvas's handles resize it whatever the tool, as MS Paint's do.
+    if tool != .select, let edge = canvasEdge(at: p, edges: false) {
+      beginCanvasResize(edge)
+      return
+    }
     switch tool {
     case .select: selectDown(p, event)
     case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush, .crayon, .marker, .watercolor, .oil:
@@ -79,6 +84,7 @@ extension CanvasView {
         draft.frame = CGRect(origin: start, size: .zero)
       }
       interaction = .shape(start: start, draft: draft)
+      invalidate(draft)
     case .polygon where shapePreset != nil:
       var draft = Element(kind: .polygon)
       style.apply(to: &draft)
@@ -86,6 +92,7 @@ extension CanvasView {
       draft.curved = shapePreset?.curved ?? false
       draft.frame = CGRect(origin: start, size: .zero)
       interaction = .shape(start: start, draft: draft)
+      invalidate(draft)
     case .polygon: polygonDown(p, event)
     case .text:
       if let hit = element(at: p), hit.kind == .text {
@@ -110,24 +117,15 @@ extension CanvasView {
     }
   }
 
+  func beginCanvasResize(_ edge: Int) {
+    drawing.beginGesture()
+    interaction = .canvasResizing(edge: edge, original: scene.paper.size)
+    // The canvas's size shows beside its corner while it's dragged.
+    needsDisplay = true
+  }
+
   private func selectDown(_ p: CGPoint, _ event: NSEvent) {
     let shift = event.modifierFlags.contains(.shift)
-    // The frame is picked by its label, and then moved by it or resized by its handles.
-    if let frame = scene.frame {
-      if frameSelected, let handle = frameHandle(at: p, frame) {
-        drawing.beginGesture()
-        interaction = .frameResizing(handle: handle, original: frame)
-        return
-      }
-      if frameLabelRect(frame).contains(p) {
-        select([])
-        frameSelected = true
-        drawing.beginGesture()
-        interaction = .frameMoving(start: p, original: frame)
-        return
-      }
-    }
-    frameSelected = false
     if !shift, let handle = handle(at: p) {
       drawing.beginGesture()
       let originals = drawing.selectedElements
@@ -163,6 +161,11 @@ extension CanvasView {
       self.croppingID = nil
       needsDisplay = true
     }
+    // The canvas's handles, and with nothing there its right and bottom edges, resize it.
+    if !shift, let edge = canvasEdge(at: p, edges: element(at: p) == nil) {
+      beginCanvasResize(edge)
+      return
+    }
     if let hit = element(at: p) {
       // Picking something outside the entered group leaves the group.
       if let group = enteredGroup, !hit.groups.contains(group) { enteredGroup = nil }
@@ -177,14 +180,6 @@ extension CanvasView {
       interaction = .moving(
         start: p, originals: drawing.selectedElements, moved: false, copies: event.modifierFlags.contains(.option))
     } else {
-      // The frame's edges drag it bigger or smaller, without picking it first.
-      if !shift, let frame = scene.frame, let edge = frameEdge(at: p, frame) {
-        select([])
-        frameSelected = true
-        drawing.beginGesture()
-        interaction = .frameResizing(handle: edge, original: frame)
-        return
-      }
       if !shift {
         select([])
         enteredGroup = nil
@@ -255,9 +250,10 @@ extension CanvasView {
         if previous != bindingTarget { needsDisplay = true }
       }
     case .polygon(var points):
+      invalidatePolygon(points)
       points[points.count - 1] = constrained(p, from: points[points.count - 2], event: event)
       interaction = .polygon(points: points)
-      needsDisplay = true
+      invalidatePolygon(points)
     case .marquee(let start, let current, let base):
       setNeedsDisplay(CGRect(boundingPoints: [start, current]).insetBy(dx: -2, dy: -2))
       interaction = .marquee(start: start, current: p, base: base)
@@ -310,15 +306,17 @@ extension CanvasView {
       setNeedsDisplay(CGRect(boundingPoints: [start, current]).insetBy(dx: -2, dy: -2))
       interaction = .textBox(start: start, current: p)
       setNeedsDisplay(CGRect(boundingPoints: [start, p]).insetBy(dx: -2, dy: -2))
-    case .frameMoving(let start, let original):
-      let moved = original.offsetBy(dx: (p.x - start.x).rounded(), dy: (p.y - start.y).rounded())
-      drawing.live { $0.frame = moved }
-      needsDisplay = true
-    case .frameResizing(let handle, let original):
-      let box = SelectionBox(frame: original, rotation: 0)
-      let resized = resizedFrame(box, handle: handle, to: snapped(p, event: event), keepAspect: event.modifierFlags.contains(.shift), fromCenter: event.modifierFlags.contains(.option))
-      drawing.live { $0.frame = resized }
-      needsDisplay = true
+    case .canvasResizing(let edge, let original):
+      var size = original
+      if edge != 5 { size.width = max(1, p.x.rounded()) }
+      if edge != 3 { size.height = max(1, p.y.rounded()) }
+      // Shift keeps the canvas's proportions from the corner.
+      if edge == 4, event.modifierFlags.contains(.shift), original.width > 0, original.height > 0 {
+        let scale = max(size.width / original.width, size.height / original.height)
+        size = CGSize(width: (original.width * scale).rounded(), height: (original.height * scale).rounded())
+      }
+      let resized = Paper.clamped(size)
+      if resized != scene.paper.size { drawing.live { $0.paper.size = resized } }
     }
     autoscroll(with: event)
   }
@@ -557,7 +555,7 @@ extension CanvasView {
 
   func erase(to p: CGPoint) {
     guard case .erasing(let path, let strokes) = interaction else { return }
-    let radius = max(2, (styles[.eraser]?.strokeWidth ?? 16) / 2)
+    let radius = max(2, (styles[.eraser]?.strokeWidth ?? Tool.eraser.defaultStyle.strokeWidth) / 2)
     let recent = Array(path.suffix(2))
     if strokes {
       drawing.live { $0.erase(along: recent, radius: radius) }
@@ -635,10 +633,11 @@ extension CanvasView {
         erasing = []
         drawing.edit("Erase") { $0.delete(ids) }
       }
-    case .frameMoving:
-      drawing.endGesture("Move Frame")
-    case .frameResizing:
-      drawing.endGesture("Resize Frame")
+    case .canvasResizing:
+      drawing.endGesture("Resize Canvas")
+      // Now it may shrink to the smaller canvas.
+      updateCanvasSize()
+      needsDisplay = true
     case .textBox(let start, let end):
       setNeedsDisplay(CGRect(boundingPoints: [start, end]).insetBy(dx: -2, dy: -2))
       let wide = abs(end.x - start.x) >= 20 / magnification
@@ -684,7 +683,9 @@ extension CanvasView {
 
   private func polygonDown(_ p: CGPoint, _ event: NSEvent) {
     guard case .polygon(var points) = interaction else {
-      interaction = .polygon(points: [snapped(p, event: event), snapped(p, event: event)])
+      let first = snapped(p, event: event)
+      interaction = .polygon(points: [first, first])
+      invalidatePolygon([first, first])
       return
     }
     let first = points[0]
@@ -694,9 +695,11 @@ extension CanvasView {
       finishPolygon(points)
       return
     }
+    invalidatePolygon(points)
     points[points.count - 1] = constrained(snapped(p, event: event), from: points[points.count - 2], event: event)
     points.append(points[points.count - 1])
     interaction = .polygon(points: points)
+    invalidatePolygon(points)
   }
 
   func finishPolygon(_ points: [CGPoint]) {
@@ -718,11 +721,10 @@ extension CanvasView {
     let p = point(event)
     hoverPoint = p
     if case .polygon(var points) = interaction {
-      let previous = CGRect(boundingPoints: Array(points.suffix(2)))
+      invalidatePolygon(points)
       points[points.count - 1] = constrained(p, from: points[points.count - 2], event: event)
       interaction = .polygon(points: points)
-      let margin = style.strokeWidth + 4
-      setNeedsDisplay(previous.union(CGRect(boundingPoints: Array(points.suffix(2)))).insetBy(dx: -margin, dy: -margin))
+      invalidatePolygon(points)
     }
     updateCursor(at: p)
   }
@@ -751,7 +753,11 @@ extension CanvasView {
     switch interaction {
     case .polygon(let points): finishPolygon(points)
     case .moving(_, _, let moved, _) where moved: drawing.cancelGesture()
-    case .resizing, .rotating, .point, .cropping, .frameMoving, .frameResizing: drawing.cancelGesture()
+    case .resizing, .rotating, .point, .cropping: drawing.cancelGesture()
+    case .canvasResizing:
+      drawing.cancelGesture()
+      interaction = .none
+      updateCanvasSize()
     case .erasing(_, let strokes):
       if strokes { drawing.endGesture("Erase") }
       erasing = []
@@ -763,10 +769,27 @@ extension CanvasView {
     needsDisplay = true
   }
 
+  /// The polygon being placed, as it's drawn: a curved one swings past its corners, and moving
+  /// the last corner reshapes the curve beside it, so all of it is redrawn.
+  func polygonDraft(_ points: [CGPoint]) -> Element {
+    var draft = Element(kind: .polygon)
+    (styles[.polygon] ?? Tool.polygon.defaultStyle).apply(to: &draft)
+    draft.fill = nil
+    draft.kind = .line
+    draft.setWorldPoints(points)
+    return draft
+  }
+
+  func invalidatePolygon(_ points: [CGPoint]) {
+    let handle = handleSize + 4 / magnification
+    let first = points.first.map { CGRect(x: $0.x - handle, y: $0.y - handle, width: handle * 2, height: handle * 2) } ?? .null
+    setNeedsDisplay(polygonDraft(points).drawnBounds.union(first))
+  }
+
   // MARK: Drawing what's under way
 
-  func drawInteraction(in context: CGContext, scale: CGFloat) {
-    let accent = NSColor.controlAccentColor
+  /// What's being drawn, drawn as it will be: on the canvas, so it's cut off at its edges.
+  func drawDraft(in context: CGContext, scale: CGFloat) {
     switch interaction {
     case .freehand(let raw, let rawPressures, let tablet, _):
       guard let brush = tool.brush else { return }
@@ -780,26 +803,37 @@ extension CanvasView {
       stroke.brush = brush
       stroke.setWorldPoints(points)
       stroke.pressures = smoothPressures
-      Renderer.draw(shown(stroke), in: context, scene: scene, images: images)
+      Renderer.draw(stroke, in: context, scene: scene, images: images)
     case .shape(_, let draft):
-      Renderer.draw(shown(draft), in: context, scene: scene, images: images)
+      Renderer.draw(draft, in: context, scene: scene, images: images)
     case .polygon(let points):
-      var draft = Element(kind: .polygon)
-      (styles[.polygon] ?? Tool.polygon.defaultStyle).apply(to: &draft)
-      draft.fill = nil
-      draft.kind = .line
-      draft.setWorldPoints(points)
-      Renderer.draw(shown(draft), in: context, scene: scene, images: images)
+      Renderer.draw(polygonDraft(points), in: context, scene: scene, images: images)
+    default: break
+    }
+  }
+
+  /// What the pointer is doing over the canvas: the box or loop being dragged to select, the
+  /// polygon's first corner, and the canvas's size while it's resized.
+  func drawInteraction(in context: CGContext, scale: CGFloat) {
+    let accent = NSColor.controlAccentColor
+    switch interaction {
+    case .polygon(let points):
       if let first = points.first {
         drawHandle(at: first, round: true, in: context, scale: scale, color: accent.cgColor)
       }
+    case .canvasResizing:
+      let page = scene.canvas
+      let label = NSAttributedString(
+        string: "\(Int(page.width)) × \(Int(page.height))",
+        attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11 / scale, weight: .medium), .foregroundColor: NSColor.secondaryLabelColor])
+      label.draw(at: CGPoint(x: page.maxX + 10 / scale, y: page.maxY + 6 / scale))
     case .marquee(let start, let current, _):
       let rect = CGRect(boundingPoints: [start, current])
       context.setFillColor(accent.withAlphaComponent(0.12).cgColor)
       context.fill(rect)
       context.setStrokeColor(accent.withAlphaComponent(0.8).cgColor)
       context.setLineWidth(1 / scale)
-      context.stroke(rect)
+      context.stroke(pixelAligned(rect, in: context))
     case .lasso(let points, _):
       guard points.count > 1 else { break }
       context.addLines(between: points)
@@ -817,7 +851,7 @@ extension CanvasView {
       context.setStrokeColor(accent.cgColor)
       context.setLineWidth(1 / scale)
       context.setLineDash(phase: 0, lengths: [4 / scale, 3 / scale])
-      context.stroke(rect)
+      context.stroke(pixelAligned(rect, in: context))
     default: break
     }
   }

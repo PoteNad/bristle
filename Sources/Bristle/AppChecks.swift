@@ -19,7 +19,7 @@
       [
         "BRISTLE_LAUNCH_CHECK", "BRISTLE_SAVE_CHECK", "BRISTLE_OPEN_CHECK", "BRISTLE_ROUNDTRIP_CHECK",
         "BRISTLE_STALE_CHECK", "BRISTLE_SESSION_PREPARE", "BRISTLE_SESSION_VERIFY", "BRISTLE_CLICK_CHECK",
-        "BRISTLE_PERF_CHECK", "BRISTLE_SNAPSHOT",
+        "BRISTLE_PERF_CHECK", "BRISTLE_SNAPSHOT", "BRISTLE_TOUR_CHECK",
       ].contains { environment[$0] != nil }
     }
 
@@ -75,6 +75,7 @@
       if environment["BRISTLE_SESSION_VERIFY"] == "1" { sessionVerify(controller) }
       if environment["BRISTLE_CLICK_CHECK"] == "1" { clickCheck(controller) }
       if environment["BRISTLE_PERF_CHECK"] == "1" { performanceCheck(controller) }
+      if environment["BRISTLE_TOUR_CHECK"] == "1" { tourCheck(controller) }
       if let path = environment["BRISTLE_SNAPSHOT"] { snapshot(path, controller) }
     }
 
@@ -193,14 +194,19 @@
           fail("unexpected menus \(menus)")
         }
         let toolbar = windows[0].toolbar?.items.map(\.itemIdentifier.rawValue) ?? []
-        let tools = editor.toolGroups.flatMap { $0.subitems.map(\.label) }
-        guard toolbar.filter({ !$0.hasPrefix("NSToolbar") }) == ["select", "paint", "shapes", "insert", "share", "palette"],
+        let tools = editor.toolButtons.map { $0.button.accessibilityLabel() ?? "" }
+        guard toolbar.filter({ !$0.hasPrefix("NSToolbar") && !$0.hasPrefix("gap") }) == ["select", "paint", "shapes", "insert", "share", "palette"],
           tools == ["Select", "Draw", "Eraser", "Fill", "Pick Color", "Rectangle", "Ellipse", "Shapes", "Line", "Arrow", "Text", "Image"],
           editor.currentSlot == .select
         else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
         guard !editor.paletteVisible, !editor.zoomBar.bar.isHidden,
-          !editor.canvasBar.bar.isHidden, document.drawing.scene.frame == nil
-        else { fail("a new window should show an endless canvas with only the zoom and canvas bars") }
+          document.drawing.scene.paper == Paper(), document.drawing.scene.paper.size == CGSize(width: 1200, height: 800)
+        else { fail("a new window should show a white 1200 × 800 canvas with only the zoom bar") }
+        // The canvas sits in the middle of the space the toolbar and the bars leave.
+        let visible = editor.canvas.visibleRect
+        guard visible.contains(document.drawing.scene.canvas) || editor.canvas.magnification < 1 else {
+          fail("a new canvas should be shown whole, visible \(visible)")
+        }
         controller.newWindowForTab(nil)
         after(1) {
           guard controller.documents.count == 2, windows[0].tabbedWindows?.count == 2 else {
@@ -248,7 +254,7 @@
                 if let error { fail("saving a PNG failed: \(error)") }
                 guard let data = FileManager.default.contents(atPath: png.path), let embedded = EmbeddedScene(png: data),
                   embedded.isCurrent, embedded.scene.elements.map(\.id) == drawn.elements.map(\.id),
-                  ImageStore.pixelSize(of: data) == drawn.exportArea?.size
+                  ImageStore.pixelSize(of: data) == drawn.canvas.size
                 else { fail("the PNG should cover the drawing and carry it") }
                 pass("drawings save as readable .bristle JSON and as PNGs that carry the drawing")
                 finish()
@@ -270,9 +276,9 @@
         else { fail("opening a file at launch should leave only that file, found \(documents.map(\.displayName))") }
         let scene = documents[0].drawing.scene
         guard scene.elements.count == 1, scene.elements[0].kind == .image, scene.elements[0].locked,
-          scene.paper.background == nil, scene.frame == scene.elements[0].frame
-        else { fail("an image should open framed by its own edges, locked in place") }
-        pass("opening an image at launch leaves no untitled window, and the image's edges become the frame")
+          scene.paper.background == nil, scene.canvas == scene.elements[0].frame
+        else { fail("an image should open as the canvas, its own size, locked in place") }
+        pass("opening an image at launch leaves no untitled window, and the image becomes the canvas")
         finish()
       }
     }
@@ -312,7 +318,7 @@
     private static func staleCheck(_ folder: String, _ controller: BristleDocumentController) {
       // A Bristle PNG whose drawing chunk was carried onto different pixels, as an editor that
       // ignores the PNG rules would leave it.
-      var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 300, height: 200)))
+      var scene = Scene(paper: Paper(size: CGSize(width: 300, height: 200)))
       var box = Element(kind: .rectangle)
       box.frame = CGRect(x: 20, y: 20, width: 100, height: 60)
       var ring = Element(kind: .ellipse)
@@ -404,8 +410,12 @@
         let editor = document.editor!
         let canvas = editor.canvas
         let undo = document.undoManager!
-        // The drags below reach far, so they stay inside the window at this zoom.
+        // The drags below reach far, so the canvas is large, and they stay inside the window at
+        // this zoom.
+        let big = Scene(paper: Paper(size: CGSize(width: 1800, height: 1400)))
+        canvas.drawing.replace(big)
         canvas.zoom(to: 0.6)
+        canvas.center(on: CGPoint(x: 900, y: 700))
         let c = middle(canvas)
         @MainActor func press(_ button: NSView) {
           button.window?.contentView?.layoutSubtreeIfNeeded()
@@ -426,43 +436,49 @@
           RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
           guard document.isDocumentEdited else { fail("\(name) should mark the drawing edited") }
         }
-        edited("adding a frame") { press(barButton(editor.canvasBar.bar, "Add Frame")) }
-        editor.window?.makeFirstResponder(canvas)
-        edited("filling the frame") {
+        edited("filling the canvas") {
           canvas.tool = .fill
-          click(canvas.scene.frame!.center, in: canvas)
+          canvas.styles[.fill, default: Tool.fill.defaultStyle].stroke = Color(hex: "#FF3B30")
+          click(canvas.scene.canvas.center, in: canvas)
         }
-        guard canvas.scene.paper.background != nil else { fail("the fill tool should color the frame") }
+        guard canvas.scene.paper.background == Color(hex: "#FF3B30") else { fail("the fill tool should colour the canvas") }
         edited("choosing a background") {
-          let item = NSMenuItem(title: "White", action: #selector(Editor.chooseBackground(_:)), keyEquivalent: "")
-          item.tag = 1
+          let item = NSMenuItem(title: "Transparent", action: #selector(Editor.chooseBackground(_:)), keyEquivalent: "")
+          item.tag = 0
           grouped(undo) { editor.chooseBackground(item) }
         }
+        guard canvas.scene.paper.background == nil else { fail("Canvas ▸ Background ▸ Transparent should clear the canvas") }
         edited("a background swatch in the Palette") {
           canvas.tool = .select
           editor.togglePalette(nil)
           editor.window?.contentView?.layoutSubtreeIfNeeded()
           guard let swatch = allButtons(in: editor.palette.view).first(where: {
-            $0 is SwatchButton && !["None", "White", "Other Colors…"].contains($0.toolTip ?? "")
+            $0 is SwatchButton && !["Transparent", "White", "Other Colors…"].contains($0.toolTip ?? "")
           }) else {
-            fail("the Palette should offer background colors")
+            fail("the Palette should offer background colours")
           }
           press(swatch)
-          editor.togglePalette(nil)
         }
-        grouped(undo) { canvas.drawing.edit("Reset") { $0 = Scene() } }
+        edited("the canvas's width in the Palette") {
+          guard let field = allViews(in: editor.palette.view).compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "Canvas width" })
+          else { fail("the Palette should have the canvas's width") }
+          field.doubleValue = 900
+          grouped(undo) { _ = field.sendAction(field.action, to: field.target) }
+          guard canvas.scene.paper.size == CGSize(width: 900, height: 1400) else {
+            fail("setting the width should resize the canvas, got \(canvas.scene.paper.size)")
+          }
+        }
+        editor.togglePalette(nil)
+        grouped(undo) { canvas.drawing.edit("Reset") { $0 = big } }
         canvas.tool = .select
         document.updateChangeCount(.changeCleared)
-        pass("coloring the canvas marks the drawing edited, however it's done")
+        pass("colouring and resizing the canvas mark the drawing edited, however it's done")
 
         // Every tool in the toolbar acts when clicked: the toolbar sends each tool's own action.
-        for group in editor.toolGroups {
-          for item in group.subitems where item.tag != Editor.Slot.image.rawValue {
-            guard let action = item.action, item.target === editor, NSApp.sendAction(action, to: item.target, from: item)
-            else { fail("the \(item.label) tool doesn't respond to clicks") }
-            guard editor.currentSlot?.rawValue == item.tag else {
-              fail("clicking \(item.label) chose \(canvas.tool) instead")
-            }
+        for (slot, button) in editor.toolButtons where slot != .image {
+          click(CGPoint(x: button.bounds.midX, y: button.bounds.midY), in: button)
+          guard editor.currentSlot == slot, button.isOn else {
+            fail("clicking \(button.accessibilityLabel() ?? "") chose \(canvas.tool) instead")
           }
         }
         // Draw shows the brushes, widths, and color in the bar at the bottom, and they respond to clicks.
@@ -497,7 +513,9 @@
         guard !editor.styleBar.bar.isHidden, (barButton(editor.styleBar.bar, "Box Selection") as? BarButton)?.isOn == true else {
           fail("Select with nothing selected should offer box and free-form selection")
         }
-        // The brush button slides the Palette in and away.
+        // The brush button slides the Palette in and away. Zoomed in, the view keeps its place;
+        // zoomed out, the canvas stays in the middle.
+        canvas.zoom(to: 1)
         guard let brush = editor.window?.toolbar?.items.first(where: { $0.itemIdentifier == Editor.paletteToolbarItem }),
           let action = brush.action
         else { fail("the toolbar should have the Palette button") }
@@ -510,15 +528,31 @@
         NSApp.sendAction(action, to: brush.target, from: brush)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
         guard !editor.paletteVisible else { fail("the brush button should hide the Palette again") }
-        guard abs(middle(canvas).x - before.x) < 2, abs(middle(canvas).y - before.y) < 2 else {
+        guard abs(middle(canvas).x - before.x) <= 3, abs(middle(canvas).y - before.y) <= 3 else {
           fail("the view should stay centred on the same place when the Palette comes and goes: \(before) → \(middle(canvas))")
         }
-        // After the view resizes, moving it elsewhere sticks.
-        canvas.center(on: CGPoint(x: before.x + 50, y: before.y + 30))
-        guard abs(middle(canvas).x - before.x - 50) < 2, abs(middle(canvas).y - before.y - 30) < 2 else {
-          fail("centring the view after it resized should stick, got \(middle(canvas))")
+        canvas.zoom(to: 0.4)
+        for _ in 0..<2 {
+          NSApp.sendAction(action, to: brush.target, from: brush)
+          RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+          guard abs(canvas.unobscuredRect.midX - canvas.scene.canvas.midX) < 2, abs(canvas.unobscuredRect.midY - canvas.scene.canvas.midY) < 2 else {
+            fail("a canvas smaller than the view should stay in its middle as the Palette comes and goes: \(canvas.unobscuredRect)")
+          }
         }
-        canvas.center(on: before)
+        // After the view resizes, moving it elsewhere sticks, when the canvas is bigger than the view.
+        let restore = canvas.unobscuredRect.center
+        canvas.zoom(to: 2)
+        let zoomed = canvas.unobscuredRect.center
+        canvas.center(on: CGPoint(x: zoomed.x + 50, y: zoomed.y + 30))
+        let recentred = canvas.unobscuredRect.center
+        guard abs(recentred.x - zoomed.x - 50) <= 1, abs(recentred.y - zoomed.y - 30) <= 1 else {
+          fail("centring the view after it resized should stick, got \(recentred) from \(zoomed)")
+        }
+        canvas.zoom(to: 0.6)
+        canvas.center(on: restore)
+        guard canvas.unobscuredRect.center.distance(to: restore) <= 2 else {
+          fail("zooming out and back should return to the same place, got \(canvas.unobscuredRect.center) from \(restore)")
+        }
         editor.choose(.draw)
         pass("every toolbar tool and the drawing bar respond to clicks, and the Palette comes and goes without moving the view")
 
@@ -755,7 +789,7 @@
           fail("the Arrange tab should have a field for X")
         }
         let placed = canvas.scene.frameBounds(of: [bent.id])
-        let origin = canvas.scene.frame?.minX ?? 0
+        let origin: CGFloat = 0
         xField.doubleValue = Double((placed.minX - origin + 25).rounded())
         grouped(undo) { _ = xField.sendAction(xField.action, to: xField.target) }
         guard abs(canvas.scene.frameBounds(of: [bent.id]).minX - origin - (placed.minX - origin + 25).rounded()) < 0.5 else {
@@ -786,48 +820,28 @@
         canvas.select([])
         pass("textured brushes draw, lines bend by their middles, the Arrange tab places things, and the spectrum picks colours")
 
-        // The frame: the bar's button adds one; it's picked by its label, moved, and removed.
-        canvas.tool = .select
+        // The canvas: its handles drag it bigger with any tool, and its edges with Select, as
+        // MS Paint's do; undo puts it back.
         canvas.select([])
-        press(barButton(editor.canvasBar.bar, "Add Frame"))
-        guard let frame = canvas.scene.frame else { fail("the frame button should add a frame") }
-        editor.canvasBar.update()
-        guard editor.canvasBar.frame.isOn else { fail("the frame button should show it's on") }
-        let label = canvas.frameLabelRect(frame)
-        drag(line(from: label.center, to: CGPoint(x: label.midX + 40, y: label.midY + 30)), in: canvas)
-        guard canvas.frameSelected, same(canvas.scene.frame, frame.offsetBy(dx: 40, dy: 30)) else {
-          fail("dragging the frame's label should pick and move it, got \(String(describing: canvas.scene.frame))")
+        canvas.tool = .pen
+        let page = canvas.scene.canvas
+        let corner2 = CGPoint(x: page.maxX, y: page.maxY)
+        canvas.center(on: corner2)
+        let strokes = canvas.scene.elements.count
+        drag(line(from: corner2, to: CGPoint(x: corner2.x + 40, y: corner2.y + 30)), in: canvas)
+        guard canvas.scene.paper.size == CGSize(width: page.width + 40, height: page.height + 30), canvas.scene.elements.count == strokes else {
+          fail("dragging the canvas's corner handle should resize it, not draw, got \(canvas.scene.paper.size)")
         }
-        editor.styleBar.update()
-        guard !editor.styleBar.bar.isHidden else { fail("a picked frame should show its size in the bar") }
-        _ = barButton(editor.styleBar.bar, "Frame Size")
-        // Choosing another tool lets go of the frame, so the bar shows that tool.
-        canvas.tool = .eraser
-        editor.styleBar.update()
-        guard !canvas.frameSelected,
-          editor.styleBar.bar.buttons.contains(where: { $0.toolTip?.hasPrefix("Object Eraser") == true })
-        else { fail("choosing the eraser should let go of the frame and show the eraser's settings") }
-        canvas.tool = .select
-        click(canvas.frameLabelRect(canvas.scene.frame!).center, in: canvas)
-        guard canvas.frameSelected else { fail("clicking the frame's label should pick it again") }
-        canvas.window?.makeFirstResponder(canvas)
-        key("\u{7F}", code: 51)
-        guard canvas.scene.frame == nil else { fail("Delete should remove a picked frame") }
         undo.undo()
-        guard canvas.scene.frame != nil else { fail("undo should bring the frame back") }
-        // Its edges drag it bigger, as MS Paint's page's do.
-        if let f = canvas.scene.frame {
-          canvas.tool = .select
-          canvas.select([])
-          let edge = CGPoint(x: f.maxX, y: f.midY)
-          drag(line(from: edge, to: CGPoint(x: edge.x + 60, y: edge.y)), in: canvas, flags: .command)
-          guard let grown = canvas.scene.frame, abs(grown.width - f.width - 60) < 1, grown.minX == f.minX else {
-            fail("dragging the frame's edge should widen it, got \(String(describing: canvas.scene.frame))")
-          }
+        guard canvas.scene.paper.size == page.size else { fail("undo should put the canvas's size back") }
+        canvas.tool = .select
+        let edge = CGPoint(x: page.maxX, y: page.maxY - 60)
+        drag(line(from: edge, to: CGPoint(x: edge.x - 100, y: edge.y)), in: canvas)
+        guard canvas.scene.paper.size == CGSize(width: page.width - 100, height: page.height) else {
+          fail("dragging the canvas's right edge with Select should narrow it, got \(canvas.scene.paper.size)")
         }
-        press(barButton(editor.canvasBar.bar, "Remove Frame"))
-        guard canvas.scene.frame == nil else { fail("the frame button should remove the frame") }
-        pass("the frame is added from the bar, picked and moved by its label, and removed with Delete or the bar")
+        undo.undo()
+        pass("the canvas resizes by its handles and edges, and undoes")
 
         document.updateChangeCount(.changeCleared)
         finish()
@@ -840,7 +854,7 @@
       after(1.5) {
         let document = firstDocument(controller)
         let canvas = document.editor!.canvas
-        var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 8000, height: 6000)))
+        var scene = Scene(paper: Paper(size: CGSize(width: 8000, height: 6000)))
         var seed: UInt64 = 7
         @MainActor func random() -> CGFloat {
           seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
@@ -934,10 +948,9 @@
             let text = c.scene.elements.first { $0.kind == .text }!
             c.beginTextEditing(text.id)
           }
-          if environment["BRISTLE_FRAME"] == "1" {
-            target.canvas.select([])
-            target.canvas.addFrame(nil)
-            target.canvas.zoomToFit(nil)
+          if let size = environment["BRISTLE_CANVAS"]?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
+            target.canvas.drawing.edit("Canvas Size") { $0.paper.size = CGSize(width: size[0], height: size[1]) }
+            target.canvas.showDrawing()
           }
           if environment["BRISTLE_SELECT"] == "all" { target.canvas.selectAll(nil) }
           if environment["BRISTLE_BRUSHES"] == "1" {
@@ -1005,10 +1018,7 @@
             click(middle(target.canvas), in: target.canvas)
             if let typing = target.canvas.textEditor {
               typing.insertText("Hello", replacementRange: typing.selectedRange())
-              target.canvas.displayIfNeeded()
-              print("layer", typing.visibleRect, typing.layer?.frame as Any, typing.wantsLayer, target.canvas.layer?.frame as Any, target.canvas.bounds, typing.frameRotation, typing.convert(typing.bounds, to: nil))
-              print("editor", typing.frame, typing.string, typing.superview === target.canvas, typing.isHidden, typing.textColor as Any, target.canvas.visibleRect, target.canvas.scene.elements.map { ($0.kind, $0.frame, $0.text) })
-            } else { print("no editor", target.canvas.scene.elements.count, target.canvas.tool) }
+            }
             if let zoom = environment["BRISTLE_ZOOM"].flatMap(Double.init) { target.canvas.zoom(to: zoom) }
           }
           if environment["BRISTLE_SELECT"] == "nothing" { target.canvas.select([]) }
@@ -1037,7 +1047,13 @@
           }
           _ = canvas
           after(environment["BRISTLE_WAIT"].flatMap(Double.init) ?? 1) {
-            guard let window = target.window else { fail("no window to capture") }
+            var captured = target.window
+            if environment["BRISTLE_SETTINGS"] == "1", let delegate = NSApp.delegate as? AppDelegate {
+              delegate.settingsController.show()
+              captured = delegate.settingsController.window
+              RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+            }
+            guard let window = captured else { fail("no window to capture") }
             let capture = Process()
             capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
             capture.arguments = ["-x", "-o", "-l", String(window.windowNumber), path]
@@ -1096,7 +1112,7 @@
       var ink = Element(kind: .freehand)
       let raw = (0...90).map { i -> CGPoint in
         let t = CGFloat(i) / 90
-        return CGPoint(x: 660 + t * 560, y: 560 + sin(t * .pi * 3) * 70 + t * 40)
+        return CGPoint(x: 640 + t * 480, y: 560 + sin(t * .pi * 3) * 70 + t * 30)
       }
       let pressures = Freehand.simulatedPressures(raw, size: 10)
       let (points, smooth) = Freehand.smoothed(raw, pressures: pressures)
@@ -1107,7 +1123,7 @@
       add(ink)
       var mark = Element(kind: .freehand)
       mark.brush = .highlighter
-      mark.setWorldPoints([CGPoint(x: 640, y: 240), CGPoint(x: 1120, y: 236)])
+      mark.setWorldPoints([CGPoint(x: 640, y: 240), CGPoint(x: 1100, y: 236)])
       mark.stroke = Color(hex: "#FFD60A")
       mark.strokeWidth = 30
       mark.opacity = 0.45

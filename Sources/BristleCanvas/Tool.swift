@@ -123,7 +123,7 @@ public enum Tool: String, CaseIterable, Sendable {
     case .rectangle, .ellipse, .polygon: Style(strokeWidth: 3)
     case .text: Style(fontSize: 28)
     case .fill: Style(stroke: Color(hex: "#0A84FF"))
-    case .eraser, .strokeEraser: Style(strokeWidth: 16)
+    case .eraser, .strokeEraser: Style(strokeWidth: 24)
     default: Style()
     }
   }

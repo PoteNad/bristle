@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 
 /// A small drawing with one of every kind of element.
 func sampleScene() -> Scene {
-  var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 400, height: 300)))
+  var scene = Scene(paper: Paper(size: CGSize(width: 400, height: 300)))
   var box = Element(id: "box", kind: .rectangle)
   box.frame = CGRect(x: 20, y: 30, width: 120, height: 80)
   box.fill = Color(hex: "#FF3B30")
@@ -41,7 +41,7 @@ func sampleScene() -> Scene {
 
 /// A PNG of a solid colour.
 func solidPNG(width: Int, height: Int, color: Color) -> Data {
-  var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: width, height: height), background: color))
+  var scene = Scene(paper: Paper(size: CGSize(width: width, height: height), background: color))
   scene.elements = []
   return Renderer.png(Renderer.image(scene)!)!
 }
@@ -187,7 +187,7 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
         { $0.elements.append(Element(kind: .rectangle)) },
         { $0.elements.remove(at: 2) },
         { $0.reorder(["box"], .front) },
-        { $0.frame = CGRect(x: 0, y: 0, width: 999, height: 300) },
+        { $0.paper.size = CGSize(width: 999, height: 300) },
         { $0.delete(["ring", "label"]); $0.elements.insert(Element(kind: .ellipse), at: 1); $0.elements[0].fill = nil },
         { $0.duplicate(["box", "shape"], offset: CGPoint(x: 10, y: 10)) },
         { $0.group(["box", "ring"]) },
@@ -291,11 +291,9 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
       let xs = scene.elements.map(\.x).sorted()
       let gaps = zip(xs, xs.dropFirst()).map { $1 - $0 }
       #expect(gaps.allSatisfy { abs($0 - gaps[0]) < 0.001 })
-      // One object lines up with the frame, and stays put without one.
+      // One object lines up with the canvas.
       var one = row(1)
-      one.align(["e0"], .center)
-      #expect(one == row(1))
-      one.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+      one.paper.size = CGSize(width: 400, height: 300)
       one.align(["e0"], .center)
       #expect(one.elements[0].center.x == 200)
     }
@@ -351,52 +349,108 @@ func solidPNG(width: Int, height: Int, color: Color) -> Data {
     }
   }
 
-  @Suite struct Frame {
+  @Suite struct Canvas {
     @Test func rotatingFourTimesRestores() {
       let original = sampleScene()
       var scene = original
       scene.rotateDrawing(clockwise: true)
-      let frame = scene.frame!
-      #expect(frame.width == 300 && frame.height == 400)
-      #expect(scene.contentBounds.minX >= frame.minX - 5 && scene.contentBounds.maxX <= frame.maxX + 5)
+      #expect(scene.paper.size == CGSize(width: 300, height: 400))
+      // The drawing turns with the canvas and stays on it.
+      #expect(scene.contentBounds.minX >= -5 && scene.contentBounds.maxX <= 305)
       for _ in 0..<3 { scene.rotateDrawing(clockwise: true) }
-      #expect(scene.frame == original.frame)
+      #expect(scene.paper == original.paper)
       for (a, b) in zip(scene.elements, original.elements) {
         #expect(a.center.distance(to: b.center) < 0.01)
         #expect(abs(sin(a.rotation - b.rotation)) < 0.0001)
       }
     }
 
-    @Test func resizingKeepsTheAnchorAndTheDrawing() {
+    @Test func resizingKeepsTheDrawingAtTheAnchor() {
       var scene = sampleScene()
       let box = scene["box"]!.frame
-      scene.resizeFrame(to: CGSize(width: 600, height: 500), anchor: .center)
-      #expect(scene.frame == CGRect(x: -100, y: -100, width: 600, height: 500))
-      #expect(scene["box"]!.frame == box)
+      // Growing from the top left leaves everything where it is, as dragging MS Paint's does.
+      scene.resizeCanvas(to: CGSize(width: 600, height: 500))
+      #expect(scene.paper.size == CGSize(width: 600, height: 500) && scene["box"]!.frame == box)
+      // Growing around the middle moves the drawing by half the growth.
+      scene.resizeCanvas(to: CGSize(width: 800, height: 700), anchor: .center)
+      #expect(scene["box"]!.frame == box.offsetBy(dx: 100, dy: 100))
+      // Cropping keeps what's in the crop where it was on the page.
       scene.crop(to: CGRect(x: 100.4, y: 100, width: 50, height: 50))
-      #expect(scene.frame == CGRect(x: 100, y: 100, width: 51, height: 50))
-      #expect(scene["box"]!.frame == box)
+      #expect(scene.paper.size == CGSize(width: 51, height: 50) && scene["box"]!.frame == box)
     }
 
-    @Test func withoutAFrameExportsCoverTheDrawing() {
+    @Test func sizesStayWholeAndInReach() {
+      #expect(Paper(size: CGSize(width: 0, height: -3)).size == CGSize(width: 1, height: 1))
+      #expect(Paper(size: CGSize(width: 99_999, height: 10.4)).size == CGSize(width: Paper.maximumSide, height: 10))
+      #expect(Scene().canvas == CGRect(x: 0, y: 0, width: 1200, height: 800) && Scene().paper.background == .white)
+    }
+
+    @Test func fittingTheCanvasToTheDrawing() {
       var scene = sampleScene()
-      scene.frame = nil
       let content = scene.contentBounds
-      let area = try! #require(scene.exportArea)
-      #expect(area.contains(content) && area.width <= content.width + Paper.margin * 2 + 2)
-      #expect(Scene().exportArea == nil)
-      scene.fitFrameToDrawing()
-      #expect(scene.frame == area)
-      let image = Renderer.image(Scene(elements: scene.elements, files: scene.files))!
-      #expect(image.width == Int(area.width) && image.height == Int(area.height))
+      scene.fitCanvasToDrawing()
+      let moved = scene.contentBounds
+      #expect(abs(moved.minX - Paper.margin) < 1 && abs(moved.minY - Paper.margin) < 1)
+      #expect(abs(scene.paper.size.width - (content.width + Paper.margin * 2)) <= 1)
+      let image = Renderer.image(scene)!
+      #expect(image.width == Int(scene.paper.size.width) && image.height == Int(scene.paper.size.height))
     }
 
-    @Test func oldFilesWithPaperOpenFramed() throws {
-      let json = ##"{"type":"bristle","version":1,"paper":{"width":320,"height":200,"background":"#FFFFFF"},"elements":[]}"##
-      let scene = try SceneFile.scene(from: Data(json.utf8))
-      #expect(scene.frame == CGRect(x: 0, y: 0, width: 320, height: 200) && scene.paper.background == .white)
-      let saved = try SceneFile.scene(from: SceneFile.data(scene))
-      #expect(saved == scene)
+    @Test func nothingShowsBeyondTheCanvas() {
+      var scene = Scene(paper: Paper(size: CGSize(width: 20, height: 20), background: nil))
+      var box = Element(kind: .rectangle)
+      box.frame = CGRect(x: 10, y: 10, width: 40, height: 40)
+      box.fill = .black
+      box.stroke = nil
+      scene.elements = [box]
+      // Exported at twice the size, the corner beyond the canvas stays empty.
+      let image = Renderer.image(scene, area: CGRect(x: 0, y: 0, width: 40, height: 40))!
+      let pixels = CFDataGetBytePtr(image.dataProvider!.data!)!
+      let row = image.bytesPerRow
+      #expect(pixels[15 * row + 15 * 4 + 3] == 255)
+      #expect(pixels[30 * row + 30 * 4 + 3] == 0)
+    }
+
+    @Test func earlyFilesKeepTheirCanvas() throws {
+      // A page at the origin, from the first drawings.
+      let paper = ##"{"type":"bristle","version":1,"paper":{"width":320,"height":200,"background":"#FFFFFF"},"elements":[]}"##
+      let scene = try SceneFile.scene(from: Data(paper.utf8))
+      #expect(scene.canvas == CGRect(x: 0, y: 0, width: 320, height: 200) && scene.paper.background == .white)
+      #expect(try SceneFile.scene(from: SceneFile.data(scene)) == scene)
+      // A frame elsewhere: the drawing moves with it to the origin.
+      let framed = ##"{"type":"bristle","version":1,"canvas":{"background":null,"frame":[100,50,300,200]},"elements":[{"id":"a","type":"rectangle","x":120,"y":60,"width":10,"height":10}]}"##
+      let moved = try SceneFile.scene(from: Data(framed.utf8))
+      #expect(moved.paper.size == CGSize(width: 300, height: 200) && moved.paper.background == nil)
+      #expect(moved["a"]?.frame == CGRect(x: 20, y: 10, width: 10, height: 10))
+      // No canvas at all: one around what's drawn.
+      let endless = ##"{"type":"bristle","version":1,"canvas":{"background":null},"elements":[{"id":"a","type":"rectangle","x":500,"y":500,"width":100,"height":50}]}"##
+      let fitted = try SceneFile.scene(from: Data(endless.utf8))
+      #expect(fitted["a"]!.frame.minX > 0 && fitted["a"]!.frame.maxX < fitted.paper.size.width)
+    }
+
+    @Test func distributingStaysWithinTheObjects() {
+      var scene = Scene()
+      // Overlapping objects too wide for gaps, as in a crowded selection.
+      for (i, x) in [100, 150, 160, 400].enumerated() {
+        var e = Element(id: "e\(i)", kind: .rectangle)
+        e.frame = CGRect(x: CGFloat(x), y: 100, width: i == 1 ? 300 : 60, height: 40)
+        scene.elements.append(e)
+      }
+      let ids = Set(scene.elements.map(\.id))
+      let before = scene.bounds(of: ids)
+      scene.distribute(ids, .horizontal)
+      let after = scene.bounds(of: ids)
+      #expect(after.minX >= before.minX - 0.01 && after.maxX <= before.maxX + 0.01)
+      // With room to spare, the gaps come out equal.
+      var spaced = Scene()
+      for (i, x) in [0, 30, 300].enumerated() {
+        var e = Element(id: "s\(i)", kind: .rectangle)
+        e.frame = CGRect(x: CGFloat(x), y: 0, width: 50, height: 50)
+        e.stroke = nil
+        spaced.elements.append(e)
+      }
+      spaced.distribute(["s0", "s1", "s2"], .horizontal)
+      #expect(abs(spaced["s1"]!.frame.minX - 150) < 0.01)
     }
   }
 

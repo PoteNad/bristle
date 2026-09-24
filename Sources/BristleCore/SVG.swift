@@ -5,7 +5,7 @@ import Foundation
 /// Writes a scene as SVG: shapes and strokes as paths, text as text, and images embedded.
 public enum SVG {
   public static func document(_ scene: Scene, area: CGRect? = nil, background: Color? = nil) -> Data {
-    let area = area ?? scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+    let area = area ?? scene.canvas
     var out = """
       <?xml version="1.0" encoding="UTF-8"?>
       <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" \
@@ -19,7 +19,7 @@ public enum SVG {
     }
     out += "<g clip-path=\"url(#paper)\">\n"
     var clips = 0
-    for element in scene.elements where element.bounds.intersects(area) {
+    for element in scene.elements where element.drawnBounds.intersects(area) {
       out += self.element(element, scene: scene, clips: &clips)
     }
     out += "</g>\n</svg>\n"

@@ -81,8 +81,8 @@ final class Bar: NSView {
 }
 
 /// A button for the bars, the size of Freeform's: a symbol in a circle, or a short title in a
-/// rounded box. While on, it's filled with the symbol cut out of it, as the toolbar marks its
-/// tool; the pointer over it and pressing it shade it lightly.
+/// capsule, the bar's own shape. While on, it's filled with the symbol cut out of it; the pointer
+/// over it and pressing it shade the same shape lightly.
 @MainActor
 final class BarButton: NSButton {
   /// Whether the choice the button stands for is the current one.
@@ -165,7 +165,8 @@ final class BarButton: NSButton {
   override func draw(_ dirtyRect: NSRect) {
     let shape: NSBezierPath
     if imagePosition == .noImage {
-      shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 3), xRadius: 8, yRadius: 8)
+      let pill = bounds.insetBy(dx: 1, dy: 1)
+      shape = NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2)
     } else {
       let side = min(bounds.width, bounds.height) - 2
       shape = NSBezierPath(ovalIn: NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side))
@@ -201,11 +202,6 @@ final class BarSwatch: NSButton {
   }
 
   required init?(coder: NSCoder) { fatalError() }
-
-  var display: ((Color) -> Color)? {
-    get { swatch.display }
-    set { swatch.display = newValue }
-  }
 
   var color: Color? {
     get { if case .color(let color) = swatch.kind { return color } else { return nil } }
@@ -335,67 +331,6 @@ final class ZoomBar: NSObject {
   @objc func zoomTo(_ sender: NSMenuItem) { canvas?.zoom(to: CGFloat(sender.tag) / 100) }
 }
 
-/// The grid, the frame, and the canvas's other options, at the bottom right.
-@MainActor
-final class CanvasBar: NSObject {
-  weak var canvas: CanvasView?
-  weak var editor: Editor?
-  let bar = Bar(label: "Canvas")
-  let grid: BarButton
-  let frame: BarButton
-  let options: BarButton
-
-  override init() {
-    grid = BarButton(symbol: "circle.grid.3x3.fill", title: "Show Grid (⌘')", target: nil, action: #selector(Editor.toggleGrid(_:)))
-    frame = BarButton(symbol: "viewfinder", title: "Frame", target: nil, action: #selector(CanvasView.toggleFrame(_:)))
-    options = BarButton(symbol: "ellipsis", title: "Canvas Options", target: nil, action: nil)
-    super.init()
-    options.target = self
-    options.action = #selector(showOptions(_:))
-    bar.set([grid, frame, options])
-  }
-
-  func update() {
-    // Sent straight to the window's own canvas and editor, whichever window is key.
-    grid.target = editor
-    frame.target = canvas
-    grid.isOn = UserDefaults.standard.bool(forKey: PreferenceKey.showsGrid)
-    let framed = canvas?.scene.frame != nil
-    frame.isOn = framed
-    frame.toolTip = framed ? "Remove Frame" : "Add Frame"
-  }
-
-  func optionsMenu() -> NSMenu {
-    let menu = NSMenu(title: "Canvas")
-    guard let canvas, let editor else { return menu }
-    let size = menu.addItem(withTitle: "Frame Size…", action: #selector(Editor.showFrameSize(_:)), keyEquivalent: "")
-    size.target = editor
-    let fit = menu.addItem(withTitle: "Fit Frame to Drawing", action: #selector(CanvasView.fitCanvasToDrawing(_:)), keyEquivalent: "")
-    fit.target = canvas
-    if canvas.scene.frame != nil {
-      let remove = menu.addItem(withTitle: "Remove Frame", action: #selector(CanvasView.removeFrame(_:)), keyEquivalent: "")
-      remove.target = canvas
-    }
-    menu.addItem(.separator())
-    let header = NSMenuItem(title: "Background", action: nil, keyEquivalent: "")
-    header.isEnabled = false
-    menu.addItem(header)
-    for (i, title) in ["None", "White", "Color…"].enumerated() {
-      let item = menu.addItem(withTitle: title, action: #selector(Editor.chooseBackground(_:)), keyEquivalent: "")
-      item.tag = i
-      item.target = editor
-    }
-    menu.addItem(.separator())
-    let guides = menu.addItem(withTitle: "Snap to Guides", action: #selector(Editor.toggleGuides(_:)), keyEquivalent: "")
-    guides.target = editor
-    let snap = menu.addItem(withTitle: "Snap to Grid", action: #selector(Editor.toggleSnapToGrid(_:)), keyEquivalent: "")
-    snap.target = editor
-    return menu
-  }
-
-  @objc private func showOptions(_ sender: NSButton) { popUpAbove(optionsMenu(), from: sender) }
-}
-
 /// The bar at the bottom centre that changes with what's being done, as Freeform's does: the
 /// brush, its width, and its color while drawing; the colors, line, and text of a selection,
 /// and a menu to arrange it. It hides when there's nothing to style.
@@ -448,18 +383,7 @@ final class StyleBar: NSObject {
       views += items
     }
 
-    if canvas.frameSelected {
-      let size = BarButton(text: "", tip: "Frame Size…", menu: false, target: editor, action: #selector(Editor.showFrameSize(_:)))
-      c.onRefresh { [weak canvas, weak size] in
-        guard let frame = canvas?.scene.frame else { return }
-        size?.setText("\(Int(frame.width)) × \(Int(frame.height))")
-      }
-      group([size])
-      group([
-        BarButton(symbol: "arrow.up.left.and.arrow.down.right", title: "Fit Frame to Drawing", target: canvas, action: #selector(CanvasView.fitCanvasToDrawing(_:))),
-        BarButton(symbol: "trash", title: "Remove Frame", target: canvas, action: #selector(CanvasView.removeFrame(_:))),
-      ])
-    } else if lockedOnly {
+    if lockedOnly {
       group([BarButton(symbol: "lock.open", title: "Unlock All (⌥⌘L)", target: canvas, action: #selector(CanvasView.unlockAll(_:)))])
     } else {
       // Brushes, or the eraser's two ways of erasing.
@@ -468,6 +392,15 @@ final class StyleBar: NSObject {
         let current = selecting ? c.brushTool : tool
         let button = BarButton(symbol: current.symbol, title: "Brush: \(current.title)", target: nil, action: nil)
         button.isOn = true
+        c.onRefresh { [weak c, weak button, weak canvas] in
+          guard let c, let button, let canvas else { return }
+          let brush = c.selecting ? c.brushTool : canvas.tool
+          guard button.toolTip != "Brush: \(brush.title)" else { return }
+          button.image = NSImage(systemSymbolName: brush.symbol, accessibilityDescription: brush.title)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+          button.toolTip = "Brush: \(brush.title)"
+          button.setAccessibilityLabel("Brush: \(brush.title)")
+        }
         group([action(button) { [weak self] sender in
           guard let self else { return }
           popUpAbove(self.brushMenu(), from: sender)
@@ -486,6 +419,13 @@ final class StyleBar: NSObject {
           image: preset.map { Self.shapeImage($0) } ?? NSImage(systemSymbolName: "pentagon", accessibilityDescription: nil)!,
           title: "Shape: \(preset?.title ?? "Corners")", target: nil, action: nil)
         button.isOn = true
+        c.onRefresh { [weak button, weak canvas] in
+          guard let button, let canvas else { return }
+          let preset = canvas.shapePreset
+          guard button.toolTip != "Shape: \(preset?.title ?? "Corners")" else { return }
+          button.image = preset.map { Self.shapeImage($0) } ?? NSImage(systemSymbolName: "pentagon", accessibilityDescription: nil)!
+          button.toolTip = "Shape: \(preset?.title ?? "Corners")"
+        }
         group([action(button) { [weak self] sender in
           guard let self else { return }
           popUpAbove(self.shapeMenu(), from: sender)
@@ -630,7 +570,6 @@ final class StyleBar: NSObject {
     apply: @escaping Controls.ColorApply
   ) -> BarSwatch {
     let swatch = BarSwatch(tip: title)
-    swatch.display = controls.display
     controls.onRefresh { [weak swatch] in swatch?.color = value() ?? nil }
     return action(swatch) { [weak self] sender in
       guard let self, let canvas = self.canvas else { return }

@@ -32,6 +32,9 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
     isVerticallyResizable = false
     isHorizontallyResizable = false
     focusRingType = .none
+    // The canvas's scroll view has rulers of its own, which aren't for text.
+    usesRuler = false
+    usesInspectorBar = false
     delegate = self
     string = element.text
     apply(element)
@@ -47,13 +50,11 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
   func apply(_ element: Element) {
     let font = NSFont(name: element.fontName, size: element.fontSize) ?? .systemFont(ofSize: element.fontSize)
     self.font = font
-    // Shown as the canvas shows it, so dark text reads light on a dark canvas while typing.
-    let shown = canvas?.shown(element) ?? element
-    textColor = (shown.stroke ?? .ink).cgColor.nsColor
+    textColor = (element.stroke ?? .ink).cgColor.nsColor
     alignment = [.left: .left, .center: .center, .right: .right][element.textAlign] ?? .left
     typingAttributes[.font] = font
     typingAttributes[.foregroundColor] = textColor
-    if let fill = shown.fill {
+    if let fill = element.fill {
       drawsBackground = true
       backgroundColor = fill.cgColor.nsColor
     } else {
@@ -67,7 +68,7 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
   private var appliedStyle = ""
 
   private func styleKey(_ e: Element) -> String {
-    "\(e.stroke?.hex ?? "")|\(e.fill?.hex ?? "")|\(e.fontName)|\(e.fontSize)|\(e.textAlign)|\(canvas?.isDarkCanvas == true)"
+    "\(e.stroke?.hex ?? "")|\(e.fill?.hex ?? "")|\(e.fontName)|\(e.fontSize)|\(e.textAlign)"
   }
 
   /// Takes up a change of colour, font, or alignment made while typing, from the bar or the
@@ -92,8 +93,8 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
     let text = string
     let font = self.font ?? .systemFont(ofSize: 24)
     let systemName = NSFont.systemFont(ofSize: font.pointSize).fontName
-    // The view shows the colour as the canvas does, which isn't the colour itself, so a colour
-    // is only taken from the colour panel.
+    // A colour is only taken from the colour panel, so the text view's own idea of it never
+    // changes the element.
     let color = pickedColor
     pickedColor = nil
     canvas.drawing.live { scene in

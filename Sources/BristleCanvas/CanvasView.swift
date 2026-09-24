@@ -30,7 +30,7 @@ public struct CanvasConfiguration: Equatable, Sendable {
   public var gridSpacing: CGFloat = 20
   /// Go back to the Select tool after adding a shape, line, or text.
   public var returnsToSelect = false
-  /// Rulers along the top and left, in points from the frame's corner, as MS Paint shows them.
+  /// Rulers along the top and left, in points from the canvas's corner, as MS Paint shows them.
   public var showsRulers = false
 
   public init() {}
@@ -53,7 +53,7 @@ public final class CanvasView: NSView {
     }
   }
 
-  /// AppKit's own rulers, measuring from the frame's corner, or the canvas's origin.
+  /// AppKit's own rulers, measuring from the canvas's corner.
   func updateRulers() {
     scrollView.hasHorizontalRuler = configuration.showsRulers
     scrollView.hasVerticalRuler = configuration.showsRulers
@@ -62,9 +62,8 @@ public final class CanvasView: NSView {
     for ruler in [scrollView.horizontalRulerView, scrollView.verticalRulerView] {
       if ruler?.measurementUnits != .points { ruler?.measurementUnits = .points }
     }
-    let origin = scene.frame?.origin ?? .zero
-    scrollView.horizontalRulerView?.originOffset = origin.x - bounds.minX
-    scrollView.verticalRulerView?.originOffset = origin.y - bounds.minY
+    scrollView.horizontalRulerView?.originOffset = -bounds.minX
+    scrollView.verticalRulerView?.originOffset = -bounds.minY
     scrollView.horizontalRulerView?.needsDisplay = true
     scrollView.verticalRulerView?.needsDisplay = true
   }
@@ -78,8 +77,6 @@ public final class CanvasView: NSView {
         selectionBeforeEyedropper = drawing.selection
       }
       finishInteraction()
-      // Choosing a tool lets go of the frame, so the bar shows the tool's settings.
-      if tool != .select { frameSelected = false }
       if tool != .select {
         endTextEditing()
         croppingID = nil
@@ -151,18 +148,22 @@ public final class CanvasView: NSView {
   var accessibilityProxies: [String: ElementAccessibility] = [:]
   /// Where the selection box was last drawn, so moving it clears the old place.
   var lastSelectionRect: CGRect?
-  /// Whether the frame is picked, to move or resize it.
-  public internal(set) var frameSelected = false { didSet { if frameSelected != oldValue { needsDisplay = true } } }
+  /// While the app's checks run, every part of the view asked to be redrawn, so they can tell
+  /// whether redrawing just those parts gives the same picture as redrawing everything.
+  var invalidated: [CGRect]?
 
   public init(drawing: Drawing) {
     self.drawing = drawing
     let scroll = CanvasScrollView()
     scrollView = scroll
     super.init(frame: NSRect(x: 0, y: 0, width: 1000, height: 800))
+    // The canvas sits in the middle of the view when it's smaller than the view, as a page does
+    // in Preview.
+    scroll.contentView = CanvasClipView()
     scroll.documentView = self
-    // An endless canvas, as in Freeform: no scroll bars, just the drawing.
-    scroll.hasVerticalScroller = false
-    scroll.hasHorizontalScroller = false
+    scroll.hasVerticalScroller = true
+    scroll.hasHorizontalScroller = true
+    scroll.autohidesScrollers = true
     scroll.allowsMagnification = true
     scroll.minMagnification = 0.1
     scroll.maxMagnification = 16
@@ -173,7 +174,7 @@ public final class CanvasView: NSView {
     registerForDraggedTypes(Self.acceptedDragTypes)
     setAccessibilityRole(.layoutArea)
     setAccessibilityLabel("Canvas")
-    updateCanvasSize(keepingVisible: false)
+    updateCanvasSize()
     let center = NotificationCenter.default
     center.addObserver(self, selector: #selector(drawingDidChange(_:)), name: .drawingDidChange, object: drawing)
     center.addObserver(
@@ -196,8 +197,16 @@ public final class CanvasView: NSView {
   public override var isFlipped: Bool { true }
   public override var acceptsFirstResponder: Bool { true }
   public override var isOpaque: Bool { true }
-  var frameIsLocked: Bool { false }
   public override var wantsUpdateLayer: Bool { false }
+
+  public override func setNeedsDisplay(_ invalidRect: NSRect) {
+    invalidated?.append(invalidRect)
+    super.setNeedsDisplay(invalidRect)
+  }
+
+  public override var needsDisplay: Bool {
+    didSet { if needsDisplay { invalidated?.append(bounds) } }
+  }
 
   public var scene: Scene { drawing.scene }
   /// Whether the pointer is drawing, moving, or changing something right now.
@@ -209,27 +218,18 @@ public final class CanvasView: NSView {
 
   // MARK: Size
 
-  /// How far the canvas reaches around the drawing; panning near an edge reaches further.
-  static let reach: CGFloat = 20_000
+  /// Room around the canvas, in canvas points, so its edges and handles can be scrolled clear
+  /// of the window's edges.
+  static let deskMargin: CGFloat = 64
 
-  /// Grows the view to reach well past the drawing and what's in view, so the canvas never ends.
-  func updateCanvasSize(keepingVisible: Bool = true) {
-    var rect = CGRect(x: -Self.reach, y: -Self.reach, width: Self.reach * 2, height: Self.reach * 2)
-    let content = scene.contentBounds
-    if !content.isNull { rect = rect.union(content.insetBy(dx: -Self.reach, dy: -Self.reach)) }
-    if let frame = scene.frame { rect = rect.union(frame.insetBy(dx: -Self.reach, dy: -Self.reach)) }
-    if keepingVisible {
-      let visible = scrollView.documentVisibleRect
-      if !visible.isEmpty { rect = rect.union(visible.insetBy(dx: -Self.reach / 2, dy: -Self.reach / 2)) }
-    }
-    rect = rect.integral
-    // The canvas only grows, so nothing jumps under the pointer.
-    if !bounds.isEmpty && bounds.width > 2000 { rect = rect.union(bounds) }
+  /// Sizes the view to the canvas and the desk around it. While the canvas's edge is dragged it
+  /// only grows, so nothing shifts under the pointer.
+  func updateCanvasSize() {
+    var rect = scene.canvas.insetBy(dx: -Self.deskMargin, dy: -Self.deskMargin).integral
+    if case .canvasResizing = interaction { rect = rect.union(bounds) }
     guard rect != bounds else { return }
-    let visible = scrollView.documentVisibleRect
     setFrameSize(rect.size)
     setBoundsOrigin(rect.origin)
-    if keepingVisible { scroll(visible.origin) }
     if configuration.showsRulers { updateRulers() }
     // AppKit leaves a subview's layer where it was when the bounds origin moves, so the text
     // being typed is put back over its element.
@@ -247,7 +247,7 @@ public final class CanvasView: NSView {
   private var lastMagnification: CGFloat = 0
 
   @objc private func visibleDidChange() {
-    let visible = scrollView.documentVisibleRect
+    let visible = unobscuredRect
     // AppKit resizes the clip view before saying the scroll view changed size, so a change of
     // size at the same zoom is the view resizing: it stays centred where it was, rather than
     // keeping its left edge.
@@ -263,12 +263,6 @@ public final class CanvasView: NSView {
       return
     }
     viewCenter = visible.center
-    // Panning near the canvas's edge makes more room beyond it.
-    if visible.minX - bounds.minX < Self.reach / 4 || bounds.maxX - visible.maxX < Self.reach / 4
-      || visible.minY - bounds.minY < Self.reach / 4 || bounds.maxY - visible.maxY < Self.reach / 4
-    {
-      updateCanvasSize()
-    }
   }
 
   @objc private func viewSizeDidChange() {
@@ -286,19 +280,19 @@ public final class CanvasView: NSView {
       pathCache.removeAll()
       if change == nil { images.removeAll() }
       updateCanvasSize()
-      if configuration.showsRulers { updateRulers() }
       needsDisplay = true
       NSAccessibility.post(element: self, notification: .layoutChanged)
       return
     }
     for element in change.touchedElements { invalidate(element) }
-    if !drawing.isInGesture { updateCanvasSize() }
     if let editor = textEditor, let element = scene[editor.elementID] { editor.refresh(element) }
     invalidateAccessibility()
   }
 
   @objc private func selectionDidChange() {
     needsDisplay = true
+    // Everything's redrawn, so the selection box is now drawn where it is.
+    lastSelectionRect = selectionRect()
     haloCache = haloCache.filter { drawing.selection.contains($0.key) }
     if let croppingID, !drawing.selection.contains(croppingID) { self.croppingID = nil }
     if let pointEditingID, !drawing.selection.contains(pointEditingID) { self.pointEditingID = nil }
@@ -306,49 +300,39 @@ public final class CanvasView: NSView {
   }
 
   func invalidate(_ element: Element) {
+    // Room for the dotted outline around a selected element, too.
     let margin = 16 / magnification + 2
-    setNeedsDisplay(element.bounds.insetBy(dx: -margin, dy: -margin))
+    setNeedsDisplay(element.drawnBounds.insetBy(dx: -margin, dy: -margin))
     if drawing.selection.contains(element.id) || !drawing.selection.isEmpty { invalidateSelectionBox() }
+  }
+
+  /// Where the selection box and its handles are drawn, with the rotation knob above them.
+  func selectionRect() -> CGRect? {
+    guard let box = selectionBox() else { return nil }
+    let margin = 40 / magnification
+    return CGRect(boundingPoints: box.corners).insetBy(dx: -margin, dy: -margin)
   }
 
   /// Redraws where the selection box and its handles are, and where they were last drawn.
   func invalidateSelectionBox() {
-    let margin = 40 / magnification
     if let last = lastSelectionRect { setNeedsDisplay(last) }
-    guard let box = selectionBox() else {
-      lastSelectionRect = nil
-      return
-    }
-    let rect = CGRect(boundingPoints: box.corners).insetBy(dx: -margin, dy: -margin)
-    setNeedsDisplay(rect)
-    lastSelectionRect = rect
+    lastSelectionRect = selectionRect()
+    if let rect = lastSelectionRect { setNeedsDisplay(rect) }
   }
 
   // MARK: Drawing
 
-  /// The canvas behind the drawing, as shown: its own color, turned around for dark mode as the
-  /// drawing is, or else one that follows the appearance, near white in light and near black in
-  /// dark, as Freeform's board does.
-  var canvasColor: CGColor {
-    if let background = scene.paper.background, scene.frame == nil { return shown(background).cgColor }
-    return automaticCanvasColor
+  /// Behind the canvas, a grey the white page stands out on, as MS Paint's and Pages' pages do.
+  var deskColor: CGColor {
+    effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+      ? CGColor(srgbRed: 0.11, green: 0.11, blue: 0.118, alpha: 1) : CGColor(srgbRed: 0.886, green: 0.89, blue: 0.906, alpha: 1)
   }
 
-  var automaticCanvasColor: CGColor {
-    appearanceIsDark ? CGColor(srgbRed: 0.118, green: 0.118, blue: 0.122, alpha: 1) : .white
+  /// Whether the canvas's own colour is dark, so the grid and marks over it are drawn light.
+  var canvasIsDark: Bool {
+    guard let background = scene.paper.background, background.alpha > 0.5 else { return false }
+    return 0.299 * background.red + 0.587 * background.green + 0.114 * background.blue < 0.5
   }
-
-  /// Around a frame, the canvas is a shade darker, so the frame reads as the page, as MS Paint's
-  /// page sits on grey.
-  var outsideFrameColor: CGColor {
-    appearanceIsDark ? CGColor(srgbRed: 0.082, green: 0.082, blue: 0.086, alpha: 1) : CGColor(srgbRed: 0.945, green: 0.945, blue: 0.953, alpha: 1)
-  }
-
-  private var appearanceIsDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
-
-  /// Whether the drawing is shown for a dark canvas, with its lightness turned around, as
-  /// Excalidraw shows it: every colour, the background too, so what the Palette shows matches.
-  var isDarkCanvas: Bool { appearanceIsDark }
 
   public override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
@@ -357,35 +341,39 @@ public final class CanvasView: NSView {
 
   public override func draw(_ dirtyRect: NSRect) {
     guard let context = NSGraphicsContext.current?.cgContext else { return }
-    let scale = magnification
-    if let frame = scene.frame {
-      // The frame is the page: its background, or the canvas colour, on a darker surround.
-      context.setFillColor(outsideFrameColor)
-      context.fill(dirtyRect)
-      context.setFillColor(scene.paper.background.map { shown($0).cgColor } ?? automaticCanvasColor)
-      context.fill(frame.intersection(dirtyRect))
-    } else {
-      context.setFillColor(canvasColor)
-      context.fill(dirtyRect)
-    }
-    drawGrid(in: context, dirty: dirtyRect, scale: scale)
-    // Zoomed in far, images show their own square pixels, as paint programs show them.
-    context.interpolationQuality = scale >= 3 ? .none : .high
     var rects: UnsafePointer<NSRect>?
     var count = 0
     getRectsBeingDrawn(&rects, count: &count)
-    let dirty = (0..<count).map { rects![$0] }
+    render(in: context, dirty: dirtyRect, rects: (0..<count).map { rects![$0] })
+  }
+
+  /// Draws the part of the view in `dirty`, made of `rects`: the desk, the canvas with the
+  /// drawing on it, and what's being done over it. The drawing is the same in light and dark
+  /// appearances, as a page in Pages is; only the desk around it follows the appearance.
+  func render(in context: CGContext, dirty dirtyRect: CGRect, rects: [CGRect]) {
+    let scale = magnification
+    let page = scene.canvas
+    context.setFillColor(deskColor)
+    context.fill(dirtyRect)
+    drawPage(page, in: context, dirty: dirtyRect, scale: scale)
+    // The drawing, and what's being drawn, show only on the canvas, as in MS Paint.
+    context.saveGState()
+    context.clip(to: page)
+    drawGrid(in: context, dirty: dirtyRect, scale: scale)
+    // Zoomed in far, images show their own square pixels, as paint programs show them.
+    context.interpolationQuality = scale >= 3 ? .none : .high
+    let dirty = rects.isEmpty ? [dirtyRect] : rects
     let tiny = 0.6 / scale
     let editing = textEditor?.elementID
     for element in scene.elements {
-      let box = element.bounds
+      let box = element.drawnBounds
       guard box.intersects(dirtyRect), dirty.contains(where: { $0.intersects(box) }), element.id != editing else {
         continue
       }
       if box.width < tiny && box.height < tiny {
         // Too small to see: a speck of its color costs far less than drawing it.
-        shown(element.stroke ?? element.fill ?? .ink).cgColor.nsColor.setFill()
-        box.fill()
+        context.setFillColor((element.stroke ?? element.fill ?? .ink).cgColor)
+        context.fill(element.bounds)
         continue
       }
       if erasing.contains(element.id) {
@@ -398,23 +386,72 @@ public final class CanvasView: NSView {
       }
     }
     drawPixelGrid(in: context, dirty: dirtyRect, scale: scale)
-    drawFrame(in: context, dirty: dirtyRect, scale: scale)
+    drawDraft(in: context, scale: scale)
+    context.restoreGState()
+    drawCanvasHandles(page, in: context, dirty: dirtyRect, scale: scale)
     drawInteraction(in: context, scale: scale)
     drawSelection(in: context, scale: scale)
     drawGuides(in: context, scale: scale)
     drawSizeRing(in: context, scale: scale)
   }
 
-  /// A color as it's shown on this canvas.
-  /// How a color looks on the canvas now: turned around on a dark canvas.
-  public func shown(_ color: Color) -> Color { isDarkCanvas ? color.onDarkCanvas : color }
+  /// The canvas on the desk: its colour, or a checkerboard where it's transparent, lifted by a
+  /// soft shadow.
+  private func drawPage(_ page: CGRect, in context: CGContext, dirty: CGRect, scale: CGFloat) {
+    let reach = 16 / scale
+    guard page.insetBy(dx: -reach, dy: -reach).intersects(dirty) else { return }
+    let background = scene.paper.background
+    context.saveGState()
+    // The shadow costs a little, so it's drawn only where the page's edge is being redrawn.
+    if !page.insetBy(dx: 1 / scale, dy: 1 / scale).contains(dirty) {
+      context.setShadow(offset: CGSize(width: 0, height: -1), blur: 5, color: CGColor(gray: 0, alpha: 0.28))
+    }
+    context.setFillColor(background.map { $0.alpha >= 1 ? $0.cgColor : .white } ?? .white)
+    context.fill(page)
+    context.restoreGState()
+    if background == nil || background!.alpha < 1 {
+      context.saveGState()
+      context.clip(to: page.intersection(dirty))
+      let side = 16 / scale
+      context.draw(Self.checkerboard, in: CGRect(x: 0, y: 0, width: side, height: side), byTiling: true)
+      if let background {
+        context.setFillColor(background.cgColor)
+        context.fill(page)
+      }
+      context.restoreGState()
+    }
+  }
 
-  func shown(_ element: Element) -> Element {
-    guard isDarkCanvas else { return element }
-    var e = element
-    e.stroke = e.stroke?.onDarkCanvas
-    e.fill = e.fill?.onDarkCanvas
-    return e
+  /// Grey and white squares, for a transparent canvas.
+  nonisolated(unsafe) static let checkerboard: CGImage = {
+    let context = CGContext(
+      data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.setFillColor(.white)
+    context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+    context.setFillColor(CGColor(gray: 0.87, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+    context.fill(CGRect(x: 1, y: 1, width: 1, height: 1))
+    return context.makeImage()!
+  }()
+
+  /// MS Paint's three handles for resizing the canvas: the right edge, the bottom edge, and the
+  /// corner between them.
+  func canvasHandles(_ page: CGRect) -> [(edge: Int, point: CGPoint)] {
+    [(3, CGPoint(x: page.maxX, y: page.midY)), (4, CGPoint(x: page.maxX, y: page.maxY)), (5, CGPoint(x: page.midX, y: page.maxY))]
+  }
+
+  private func drawCanvasHandles(_ page: CGRect, in context: CGContext, dirty: CGRect, scale: CGFloat) {
+    let side = 7 / scale
+    for (_, p) in canvasHandles(page) {
+      let rect = CGRect(x: p.x - side / 2, y: p.y - side / 2, width: side, height: side)
+      guard rect.insetBy(dx: -2 / scale, dy: -2 / scale).intersects(dirty) else { continue }
+      context.setFillColor(.white)
+      context.fill(rect)
+      context.setStrokeColor(CGColor(gray: 0.45, alpha: 1))
+      context.setLineWidth(1 / scale)
+      context.stroke(rect.insetBy(dx: 0.5 / scale, dy: 0.5 / scale))
+    }
   }
 
   func draw(_ element: Element, in context: CGContext) {
@@ -431,11 +468,11 @@ public final class CanvasView: NSView {
       if element.opacity < 1 { context.setAlpha(element.opacity) }
       if element.rotation != 0 { context.concatenate(element.transform) }
       // Drawn by the renderer, texture and all, from the kept outline.
-      Renderer.drawInk(shown(element), path: path, in: context)
+      Renderer.drawInk(element, path: path, in: context)
       context.restoreGState()
       return
     }
-    Renderer.draw(shown(element), in: context, scene: scene, images: images)
+    Renderer.draw(element, in: context, scene: scene, images: images)
   }
 
   /// A grid of dots, as Freeform draws.
@@ -445,7 +482,7 @@ public final class CanvasView: NSView {
     var spacing = configuration.gridSpacing
     while spacing * scale < 14 { spacing *= 2 }
     let dot = max(1 / scale, 0.25)
-    context.setFillColor(isDarkCanvas ? CGColor(gray: 1, alpha: 0.2) : CGColor(gray: 0, alpha: 0.2))
+    context.setFillColor(canvasIsDark ? CGColor(gray: 1, alpha: 0.25) : CGColor(gray: 0, alpha: 0.2))
     // All the dots are one path, filled at once, which is far quicker than one at a time.
     let dots = CGMutablePath()
     var y = (dirty.minY / spacing).rounded(.up) * spacing
@@ -470,7 +507,7 @@ public final class CanvasView: NSView {
     context.saveGState()
     defer { context.restoreGState() }
     let fade = min(1, (scale - Self.pixelGridZoom) / Self.pixelGridZoom + 0.5)
-    context.setStrokeColor(appearanceIsDark ? CGColor(gray: 1, alpha: 0.12 * fade) : CGColor(gray: 0, alpha: 0.1 * fade))
+    context.setStrokeColor(canvasIsDark ? CGColor(gray: 1, alpha: 0.12 * fade) : CGColor(gray: 0, alpha: 0.1 * fade))
     context.setLineWidth(1 / scale)
     var x = dirty.minX.rounded(.down)
     while x <= dirty.maxX {
@@ -485,33 +522,6 @@ public final class CanvasView: NSView {
       y += 1
     }
     context.strokePath()
-  }
-
-  /// The frame's outline, with its size above its top-left corner, as Excalidraw labels frames.
-  private func drawFrame(in context: CGContext, dirty: CGRect, scale: CGFloat) {
-    guard let frame = scene.frame, frame.insetBy(dx: -40 / scale, dy: -40 / scale).intersects(dirty) else { return }
-    let selected = frameSelected
-    context.saveGState()
-    context.setStrokeColor(selected ? NSColor.controlAccentColor.cgColor : (isDarkCanvas ? CGColor(gray: 1, alpha: 0.35) : CGColor(gray: 0, alpha: 0.3)))
-    context.setLineWidth((selected ? 2 : 1) / scale)
-    context.stroke(frame)
-    context.restoreGState()
-    let label = frameLabel(frame)
-    let attributes: [NSAttributedString.Key: Any] = [
-      .font: NSFont.systemFont(ofSize: 11 / scale, weight: .medium),
-      .foregroundColor: selected ? NSColor.controlAccentColor : NSColor.secondaryLabelColor,
-    ]
-    // Clear of the corner handle, so the label reads whole when the frame is picked.
-    NSAttributedString(string: label, attributes: attributes).draw(at: CGPoint(x: frame.minX, y: frame.minY - 21 / scale))
-    if selected, !frameIsLocked { drawFrameHandles(frame, in: context, scale: scale) }
-  }
-
-  func frameLabel(_ frame: CGRect) -> String { "Frame  \(Int(frame.width)) × \(Int(frame.height))" }
-
-  /// The frame's label, which is clicked to pick the frame.
-  func frameLabelRect(_ frame: CGRect) -> CGRect {
-    let width = (CGFloat(frameLabel(frame).count) * 6.5 + 8) / magnification
-    return CGRect(x: frame.minX, y: frame.minY - 23 / magnification, width: width, height: 17 / magnification)
   }
 
   private func drawGuides(in context: CGContext, scale: CGFloat) {
@@ -532,14 +542,20 @@ public final class CanvasView: NSView {
   @objc func zoomDidChange() {
     window?.invalidateCursorRects(for: self)
     needsDisplay = true
+    lastSelectionRect = selectionRect()
     delegate?.canvasViewZoomDidChange(self)
   }
 
-  /// Zooms to `value`, keeping the middle of the view, or `point`, still.
+  /// Zooms to `value`, keeping the middle of the view, or `point`, where it is on screen.
   public func zoom(to value: CGFloat, around point: CGPoint? = nil) {
     let value = min(scrollView.maxMagnification, max(scrollView.minMagnification, value))
-    let visible = scrollView.documentVisibleRect
-    scrollView.setMagnification(value, centeredAt: point ?? CGPoint(x: visible.midX, y: visible.midY))
+    let before = magnification
+    let middle = unobscuredRect.center
+    let anchor = point ?? middle
+    scrollView.magnification = value
+    // The anchor stays the same distance from the middle on screen.
+    let factor = before / value
+    center(on: CGPoint(x: anchor.x - (anchor.x - middle.x) * factor, y: anchor.y - (anchor.y - middle.y) * factor))
     zoomDidChange()
   }
 
@@ -556,73 +572,86 @@ public final class CanvasView: NSView {
 
   @objc public func actualSize(_ sender: Any?) { zoom(to: 1) }
 
-  /// Room to keep clear around the drawing when fitting it, such as for bars over the view.
+  /// Room to keep clear around the canvas when fitting it, beyond what's laid over the view.
   public var fitInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
 
-  /// What Zoom to Fit shows: the frame, or all of the drawing.
-  var fitArea: CGRect? {
-    if let frame = scene.frame { return frame }
-    let content = scene.contentBounds
-    return content.isNull ? nil : content
-  }
-
-  /// Shows the whole drawing, or its frame, as large as fits.
-  @objc public func zoomToFit(_ sender: Any?) { zoom(toFit: fitArea, largest: scrollView.maxMagnification) }
+  /// Shows the whole canvas, as large as fits.
+  @objc public func zoomToFit(_ sender: Any?) { zoom(toFit: scene.canvas, largest: scrollView.maxMagnification) }
 
   /// Shows the selection as large as fits.
   @objc public func zoomToSelection(_ sender: Any?) {
     let box = scene.bounds(of: drawing.selection)
-    zoom(toFit: box.isNull ? fitArea : box, largest: 4)
+    zoom(toFit: box.isNull ? scene.canvas : box, largest: 4)
   }
 
-  func zoom(toFit area: CGRect?, largest: CGFloat) {
-    guard let area else {
-      scrollView.magnification = 1
-      center(on: .zero)
-      zoomDidChange()
-      return
-    }
-    let available = scrollView.contentSize
-    let width = available.width - fitInsets.left - fitInsets.right
-    let height = available.height - fitInsets.top - fitInsets.bottom
-    guard width > 40, height > 40 else { return }
-    let fit = min(width / max(area.width, 1), height / max(area.height, 1), largest)
+  /// The room there is for the canvas, in points on screen: the view, less what's laid over it
+  /// and the margins kept around it.
+  var roomToFit: CGSize {
+    let clip = scrollView.contentView
+    let insets = overlaidInsets
+    return CGSize(
+      width: clip.frame.width - insets.left - insets.right - fitInsets.left - fitInsets.right,
+      height: clip.frame.height - insets.top - insets.bottom - fitInsets.top - fitInsets.bottom)
+  }
+
+  func zoom(toFit area: CGRect, largest: CGFloat) {
+    let room = roomToFit
+    guard room.width > 40, room.height > 40 else { return }
+    let fit = min(room.width / max(area.width, 1), room.height / max(area.height, 1), largest)
     scrollView.magnification = min(scrollView.maxMagnification, max(scrollView.minMagnification, fit))
-    centerInView(area)
+    center(on: area.center)
     zoomDidChange()
   }
 
-  /// Opens a drawing the way it's best seen: at actual size when it fits, and fitted otherwise,
-  /// centred in the space the bars leave.
+  /// Opens a drawing the way it's best seen: the canvas at actual size when it fits, and
+  /// fitted otherwise, in the middle of the space the toolbar and bars leave.
   public func showDrawing() {
-    guard let area = fitArea else {
+    let area = scene.canvas
+    let room = roomToFit
+    if area.width <= room.width && area.height <= room.height {
       scrollView.magnification = 1
-      center(on: .zero)
-      zoomDidChange()
-      return
-    }
-    let available = scrollView.contentSize
-    if area.width + fitInsets.left + fitInsets.right <= available.width
-      && area.height + fitInsets.top + fitInsets.bottom <= available.height
-    {
-      scrollView.magnification = 1
-      centerInView(area)
+      center(on: area.center)
       zoomDidChange()
     } else {
       zoom(toFit: area, largest: 1)
     }
   }
 
-  private func centerInView(_ area: CGRect) {
-    let shift = CGPoint(
-      x: (fitInsets.left - fitInsets.right) / 2 / magnification, y: (fitInsets.top - fitInsets.bottom) / 2 / magnification)
-    center(on: CGPoint(x: area.midX - shift.x, y: area.midY - shift.y))
+  /// The part of the view that nothing is laid over, such as the toolbar, in the canvas's
+  /// coordinates.
+  /// What's laid over the view, in points on screen: the scroll view's insets, for the toolbar
+  /// and bars, and the rulers, which lie over the canvas below the toolbar.
+  var overlaidInsets: NSEdgeInsets {
+    var insets = scrollView.contentInsets
+    if scrollView.rulersVisible {
+      insets.top += scrollView.horizontalRulerView?.requiredThickness ?? 0
+      insets.left += scrollView.verticalRulerView?.requiredThickness ?? 0
+    }
+    return insets
   }
 
+  public var unobscuredRect: CGRect {
+    let clip = scrollView.contentView
+    let insets = overlaidInsets
+    let scale = magnification
+    var rect = clip.bounds
+    rect.origin.x += insets.left / scale
+    rect.origin.y += insets.top / scale
+    rect.size.width -= (insets.left + insets.right) / scale
+    rect.size.height -= (insets.top + insets.bottom) / scale
+    return convert(rect, from: clip)
+  }
+
+  /// Scrolls so `point` is in the middle of the unobscured view, as near as the canvas allows.
   public func center(on point: CGPoint) {
     viewCenter = point
-    let visible = scrollView.documentVisibleRect
-    scroll(CGPoint(x: point.x - visible.width / 2, y: point.y - visible.height / 2))
+    let clip = scrollView.contentView
+    let now = unobscuredRect.center
+    var bounds = clip.bounds
+    bounds.origin.x += point.x - now.x
+    bounds.origin.y += point.y - now.y
+    clip.scroll(to: clip.constrainBoundsRect(bounds).origin)
+    scrollView.reflectScrolledClipView(clip)
   }
 
   public override func magnify(with event: NSEvent) {
@@ -643,6 +672,42 @@ public final class CanvasView: NSView {
 
 extension CGColor {
   var nsColor: NSColor { NSColor(cgColor: self) ?? .black }
+}
+
+/// Keeps the canvas in the middle of the view when it's smaller than the view, and lets its
+/// edges scroll clear of what's laid over the view, such as the toolbar and the bars.
+final class CanvasClipView: NSClipView {
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    // Only the scroll view's own insets, for the toolbar and the bars, not the window's.
+    automaticallyAdjustsContentInsets = false
+  }
+
+  required init?(coder: NSCoder) { fatalError() }
+
+  /// What's laid over the view, in points on screen.
+  var overlaid: NSEdgeInsets { (documentView as? CanvasView)?.overlaidInsets ?? NSEdgeInsets() }
+
+  override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+    var rect = super.constrainBoundsRect(proposedBounds)
+    guard let document = documentView, rect.width > 0, rect.height > 0 else { return rect }
+    let doc = document.frame
+    let scale = frame.width / rect.width
+    let insets = overlaid
+    let left = insets.left / scale, right = insets.right / scale, top = insets.top / scale, bottom = insets.bottom / scale
+    let width = rect.width - left - right, height = rect.height - top - bottom
+    // Centred when it fits the space left clear; otherwise scrolled no further than its edges
+    // reaching that space's edges.
+    func place(_ proposed: CGFloat, _ low: CGFloat, _ high: CGFloat, _ room: CGFloat, before: CGFloat, after: CGFloat) -> CGFloat {
+      if high - low <= room { return (low + high) / 2 - room / 2 - before }
+      return min(max(proposed, low - before), high + after - (room + before + after))
+    }
+    let x = place(proposedBounds.minX, doc.minX, doc.maxX, width, before: left, after: right)
+    let y = place(proposedBounds.minY, doc.minY, doc.maxY, height, before: top, after: bottom)
+    // On whole pixels, so the canvas's edges stay sharp.
+    rect.origin = CGPoint(x: (x * scale).rounded() / scale, y: (y * scale).rounded() / scale)
+    return rect
+  }
 }
 
 /// The canvas's scroll view. Command-scrolling zooms around the pointer, as in Preview. It's

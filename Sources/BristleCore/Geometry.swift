@@ -232,6 +232,21 @@ extension Element {
     return CGRect(boundingPoints: box.corners.map { $0.applying(transform) })
   }
 
+  /// Everything the element paints, with room for soft and textured ink, glyphs that lean past
+  /// their box, and smoothed edges: what must be redrawn when it changes.
+  public var drawnBounds: CGRect {
+    var extra: CGFloat = 2
+    if kind == .freehand {
+      switch brush {
+      case .watercolor: extra += strokeWidth * 0.75
+      case .airbrush, .calligraphy, .oil: extra += strokeWidth * 0.25
+      default: break
+      }
+    }
+    if kind == .text { extra += fontSize * 0.3 }
+    return bounds.insetBy(dx: -extra, dy: -extra)
+  }
+
   /// The frame's corners on the canvas, for selection outlines of rotated elements.
   public var worldCorners: [CGPoint] { frame.corners.map { $0.applying(transform) } }
 

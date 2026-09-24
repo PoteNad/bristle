@@ -129,7 +129,21 @@ public enum Renderer {
       context.addPath(path)
       context.clip()
       context.setBlendMode(.destinationOut)
-      context.draw(grain, in: CGRect(x: 0, y: 0, width: 48, height: 48), byTiling: true)
+      // Tile by tile, each always in the same place, so a stroke redrawn in parts, as the
+      // canvas does, matches one drawn whole.
+      let side: CGFloat = 48
+      let area = path.boundingBoxOfPath.intersection(context.boundingBoxOfClipPath)
+      if !area.isNull {
+        var y = (area.minY / side).rounded(.down) * side
+        while y < area.maxY {
+          var x = (area.minX / side).rounded(.down) * side
+          while x < area.maxX {
+            context.draw(grain, in: CGRect(x: x, y: y, width: side, height: side))
+            x += side
+          }
+          y += side
+        }
+      }
       context.endTransparencyLayer()
     case .marker:
       // One flat layer, so the stroke doesn't darken where it crosses itself.
@@ -246,16 +260,20 @@ public enum Renderer {
     context.restoreGState()
   }
 
-  /// Draws the background, if any, and the elements that touch `rect`.
+  /// Draws the background, if any, and the elements that touch `rect`, within the canvas.
   public static func draw(
     _ scene: Scene, in context: CGContext, rect: CGRect? = nil, images: ImageStore, background: Color? = nil
   ) {
-    let area = rect ?? scene.exportArea ?? .zero
+    let area = rect ?? scene.canvas
     if let background = scene.paper.background ?? background {
       context.setFillColor(background.cgColor)
-      context.fill(area)
+      context.fill(area.intersection(scene.canvas))
     }
-    for element in scene.elements where element.bounds.intersects(area) {
+    // Nothing shows beyond the canvas.
+    context.saveGState()
+    defer { context.restoreGState() }
+    context.clip(to: scene.canvas)
+    for element in scene.elements where element.drawnBounds.intersects(area) {
       draw(element, in: context, scene: scene, images: images)
     }
   }
@@ -273,12 +291,12 @@ public enum Renderer {
     return context
   }
 
-  /// The drawing as an image, `scale` pixels per canvas unit: its frame, or all of it. A
-  /// `background` fills the image when the drawing has no background of its own.
+  /// The drawing as an image, `scale` pixels per canvas unit: its canvas, or `area` of it. A
+  /// `background` fills the image when the canvas is transparent.
   public static func image(
     _ scene: Scene, scale: CGFloat = 1, area: CGRect? = nil, images: ImageStore = ImageStore(), background: Color? = nil
   ) -> CGImage? {
-    let area = area ?? scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+    let area = area ?? scene.canvas
     guard let context = bitmap(size: area.size, scale: scale) else { return nil }
     context.translateBy(x: -area.minX, y: -area.minY)
     draw(scene, in: context, rect: area, images: images, background: background)
@@ -296,12 +314,12 @@ public enum Renderer {
     return CGImageDestinationFinalize(destination) ? data as Data : nil
   }
 
-  /// The drawing as a vector PDF, one page the size of its frame, or of all of it.
+  /// The drawing as a vector PDF, one page the size of its canvas.
   public static func pdf(
     _ scene: Scene, area: CGRect? = nil, images: ImageStore = ImageStore(), title: String? = nil,
     background: Color? = nil
   ) -> Data {
-    let area = area ?? scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+    let area = area ?? scene.canvas
     let data = NSMutableData()
     var box = CGRect(origin: .zero, size: area.size)
     var info: [CFString: Any] = [kCGPDFContextCreator: "Bristle"]

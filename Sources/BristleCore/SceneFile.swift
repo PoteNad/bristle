@@ -59,10 +59,26 @@ public enum SceneFile {
     let version = (object["version"] as? NSNumber)?.intValue ?? 1
     guard version <= Self.version else { throw ReadError.newerVersion(version) }
     var scene = Scene()
-    if let canvas = object["canvas"] as? [String: Any] ?? object["paper"] as? [String: Any] {
-      scene.paper = readPaper(canvas)
-    }
     scene.elements = (object["elements"] as? [Any] ?? []).compactMap { ($0 as? [String: Any]).flatMap(readElement) }
+    let canvas = object["canvas"] as? [String: Any] ?? object["paper"] as? [String: Any] ?? [:]
+    let (paper, origin) = readPaper(canvas)
+    scene.paper = paper
+    if let origin {
+      // Early drawings put their canvas anywhere; now it starts at the origin.
+      scene.shiftAll(dx: -origin.x, dy: -origin.y)
+    } else if canvas["width"] == nil, !scene.contentBounds.isNull {
+      // A drawing without a canvas gets one big enough for what's drawn, which stays where it
+      // is when it can.
+      let content = scene.contentBounds
+      let placed = scene.frameBounds(of: Set(scene.elements.map(\.id)))
+      if placed.minX >= 0, placed.minY >= 0 {
+        scene.paper.size = CGSize(
+          width: max(scene.paper.size.width, content.maxX + Paper.margin),
+          height: max(scene.paper.size.height, content.maxY + Paper.margin))
+      } else {
+        scene.fitCanvasToDrawing()
+      }
+    }
     for (id, value) in object["files"] as? [String: Any] ?? [:] {
       guard let entry = value as? [String: Any], let type = entry["type"] as? String,
         let base64 = entry["data"] as? String, let data = Data(base64Encoded: base64)
@@ -76,10 +92,9 @@ public enum SceneFile {
 
   static func paperJSON(_ paper: Paper) -> JSON {
     var members: [(String, JSON)] = []
+    members.append(("width", .number(paper.size.width)))
+    members.append(("height", .number(paper.size.height)))
     members.append(("background", paper.background.map { .string($0.hex) } ?? .null))
-    if let frame = paper.frame {
-      members.append(("frame", .array([frame.minX, frame.minY, frame.width, frame.height].map { .number($0) })))
-    }
     if paper.resolution != 72 { members.append(("resolution", .number(paper.resolution))) }
     return .object(members)
   }
@@ -151,17 +166,20 @@ public enum SceneFile {
     return CGPoint(x: x, y: y)
   }
 
-  static func readPaper(_ object: [String: Any]) -> Paper {
+  /// The canvas, and where its corner was in early drawings that kept it elsewhere.
+  static func readPaper(_ object: [String: Any]) -> (Paper, origin: CGPoint?) {
     var paper = Paper()
-    if let hex = object["background"] as? String { paper.background = Color(hex: hex) }
-    if let values = (object["frame"] as? [Any])?.compactMap(number), values.count == 4, values[2] >= 1, values[3] >= 1 {
-      paper.frame = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
-    } else if let width = number(object["width"]), let height = number(object["height"]), width >= 1, height >= 1 {
-      // Early drawings had a page at the origin.
-      paper.frame = CGRect(x: 0, y: 0, width: width, height: height)
+    var origin: CGPoint?
+    // No background is a transparent canvas; a missing one is white.
+    if object.keys.contains("background") { paper.background = (object["background"] as? String).flatMap(Color.init(hex:)) }
+    if let width = number(object["width"]), let height = number(object["height"]), width >= 1, height >= 1 {
+      paper.size = CGSize(width: width, height: height)
+    } else if let values = (object["frame"] as? [Any])?.compactMap(number), values.count == 4, values[2] >= 1, values[3] >= 1 {
+      paper.size = CGSize(width: values[2], height: values[3])
+      origin = CGPoint(x: values[0], y: values[1])
     }
     if let resolution = number(object["resolution"]), resolution > 0 { paper.resolution = resolution }
-    return paper
+    return (paper, origin)
   }
 
   static func readElement(_ o: [String: Any]) -> Element? {

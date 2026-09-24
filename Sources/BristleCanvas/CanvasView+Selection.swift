@@ -111,40 +111,19 @@ extension CanvasView {
     return nil
   }
 
-  /// Which of the picked frame's handles is under a point.
-  func frameHandle(at point: CGPoint, _ frame: CGRect) -> Int? {
-    let reach = handleSize / 2 + 3 / magnification
-    let box = SelectionBox(frame: frame, rotation: 0)
-    return (0..<8).first { i in
-      let p = box.point(SelectionBox.units[i])
-      return abs(p.x - point.x) <= reach && abs(p.y - point.y) <= reach
-    }
-  }
-
-  /// Which of the frame's edges or corners is under a point, to drag it, as MS Paint's page is
-  /// resized by its edges. Numbered as the selection's handles are.
-  func frameEdge(at p: CGPoint, _ frame: CGRect) -> Int? {
-    let reach = 5 / magnification, corner = 9 / magnification
-    let near = { (a: CGFloat, b: CGFloat, r: CGFloat) in abs(a - b) <= r }
-    let left = near(p.x, frame.minX, corner), right = near(p.x, frame.maxX, corner)
-    let top = near(p.y, frame.minY, corner), bottom = near(p.y, frame.maxY, corner)
-    if top && left { return 0 }
-    if top && right { return 2 }
-    if bottom && right { return 4 }
-    if bottom && left { return 6 }
-    let across = p.x > frame.minX && p.x < frame.maxX, down = p.y > frame.minY && p.y < frame.maxY
-    if across && near(p.y, frame.minY, reach) { return 1 }
-    if across && near(p.y, frame.maxY, reach) { return 5 }
-    if down && near(p.x, frame.minX, reach) { return 7 }
-    if down && near(p.x, frame.maxX, reach) { return 3 }
+  /// Which of the canvas's handles is under a point, or with `edges`, which of its right and
+  /// bottom edges: 3 the right, 4 the corner, 5 the bottom, as the selection's handles are
+  /// numbered.
+  func canvasEdge(at p: CGPoint, edges: Bool) -> Int? {
+    let page = scene.canvas
+    let reach = 7 / magnification
+    for (edge, c) in canvasHandles(page) where abs(c.x - p.x) <= reach && abs(c.y - p.y) <= reach { return edge }
+    guard edges else { return nil }
+    let near = 4 / magnification
+    if abs(p.x - page.maxX) <= near, abs(p.y - page.maxY) <= near { return 4 }
+    if abs(p.x - page.maxX) <= near, p.y >= page.minY, p.y <= page.maxY { return 3 }
+    if abs(p.y - page.maxY) <= near, p.x >= page.minX, p.x <= page.maxX { return 5 }
     return nil
-  }
-
-  func drawFrameHandles(_ frame: CGRect, in context: CGContext, scale: CGFloat) {
-    let box = SelectionBox(frame: frame, rotation: 0)
-    for i in 0..<8 {
-      drawHandle(at: box.point(SelectionBox.units[i]), round: false, in: context, scale: scale, color: NSColor.controlAccentColor.cgColor)
-    }
   }
 
   // MARK: Drawing the selection
@@ -216,9 +195,13 @@ extension CanvasView {
       if line.isLinear { return }
     }
     guard let box = selectionBox() else { return }
-    let corners = box.corners
-    context.addLines(between: corners + [corners[0]])
-    context.strokePath()
+    if box.rotation == 0 {
+      context.stroke(pixelAligned(box.frame, in: context))
+    } else {
+      let corners = box.corners
+      context.addLines(between: corners + [corners[0]])
+      context.strokePath()
+    }
     guard !locked else { return }
     if croppingID == nil {
       let top = box.point(CGPoint(x: 0.5, y: 0)), knob = rotationHandle(box)
@@ -250,7 +233,8 @@ extension CanvasView {
     // The dots are drawn along every edge, then the inside is cleared, so only the outer edge
     // shows, however the pieces overlap.
     context.beginTransparencyLayer(auxiliaryInfo: nil)
-    context.setStrokeColor(NSColor.secondaryLabelColor.cgColor)
+    // A mid grey, which shows on a light canvas and a dark one alike.
+    context.setStrokeColor(CGColor(gray: 0.5, alpha: 0.9))
     context.setLineWidth(width * 2)
     context.setLineCap(.round)
     context.setLineDash(phase: 0, lengths: [0, 4 / scale])
@@ -289,6 +273,16 @@ extension CanvasView {
     }
     if element.rotation != 0 { pieces = pieces.map { $0.copy(using: [element.transform]) ?? $0 } }
     return pieces
+  }
+
+  /// A rectangle whose one-pixel outline falls on the middle of whole pixels, so it's crisp,
+  /// and drawn the same however the view is redrawn in parts.
+  func pixelAligned(_ rect: CGRect, in context: CGContext) -> CGRect {
+    let device = context.convertToDeviceSpace(rect).standardized
+    let snapped = CGRect(
+      x: device.minX.rounded() + 0.5, y: device.minY.rounded() + 0.5,
+      width: max(0, device.width.rounded()), height: max(0, device.height.rounded()))
+    return context.convertToUserSpace(snapped).standardized
   }
 
   func drawHandle(
@@ -330,7 +324,7 @@ extension CanvasView {
     whole.rotation = 0
     Renderer.draw(whole, in: context, scene: scene, images: images)
     context.setAlpha(1)
-    context.setStrokeColor(NSColor.secondaryLabelColor.cgColor)
+    context.setStrokeColor(CGColor(gray: 0.5, alpha: 0.9))
     context.setLineWidth(1 / scale)
     context.setLineDash(phase: 0, lengths: [4 / scale, 3 / scale])
     context.stroke(full)
@@ -347,10 +341,12 @@ extension CanvasView {
 
   // MARK: Picking
 
-  /// The topmost element under a point, with the group it acts with.
+  /// The topmost element under a point. Beyond the canvas nothing shows, so only what's
+  /// selected, whose outline does show, is picked there.
   func element(at point: CGPoint) -> Element? {
     let tolerance = 5 / magnification
-    return pickableElements.last { $0.hit(point, tolerance: tolerance) }
+    let onCanvas = scene.canvas.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+    return pickableElements.last { (onCanvas || drawing.selection.contains($0.id)) && $0.hit(point, tolerance: tolerance) }
   }
 
   /// What picking an element selects: its whole group, unless the group has been entered.

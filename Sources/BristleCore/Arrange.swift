@@ -83,12 +83,11 @@ extension Scene {
 
   // MARK: Alignment
 
-  /// Lines up the elements, or a single element with the frame.
+  /// Lines up the elements, or a single element with the canvas.
   public mutating func align(_ ids: Set<String>, _ alignment: Alignment) {
     let units = selectionUnits(ids)
     guard !units.isEmpty else { return }
-    if units.count == 1 && frame == nil { return }
-    let target = units.count == 1 ? frame! : units.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
+    let target = units.count == 1 ? canvas : units.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
     for unit in units {
       let box = unit.bounds
       var dx: CGFloat = 0, dy: CGFloat = 0
@@ -104,26 +103,39 @@ extension Scene {
     }
   }
 
-  /// Spaces the elements evenly between the first and last.
+  /// Spaces the elements evenly across the room they take up, as Keynote does: equal gaps
+  /// between them, or, when they're too wide for gaps, their middles evenly apart. Nothing
+  /// moves beyond the elements' own extent, or off the canvas.
   public mutating func distribute(_ ids: Set<String>, _ axis: Axis) {
     var units = selectionUnits(ids)
     guard units.count >= 3 else { return }
     let horizontal = axis == .horizontal
+    func low(_ r: CGRect) -> CGFloat { horizontal ? r.minX : r.minY }
+    func size(_ r: CGRect) -> CGFloat { horizontal ? r.width : r.height }
     units.sort { horizontal ? $0.bounds.midX < $1.bounds.midX : $0.bounds.midY < $1.bounds.midY }
-    let first = units.first!.bounds, last = units.last!.bounds
-    let span = horizontal ? last.maxX - first.minX : last.maxY - first.minY
-    let occupied = units.reduce(0) { $0 + (horizontal ? $1.bounds.width : $1.bounds.height) }
-    let gap = (span - occupied) / CGFloat(units.count - 1)
-    var position = horizontal ? first.maxX + gap : first.maxY + gap
-    for unit in units.dropFirst().dropLast() {
-      let box = unit.bounds
-      if horizontal {
-        move(unit.ids, dx: position - box.minX, dy: 0)
-        position += box.width + gap
-      } else {
-        move(unit.ids, dx: 0, dy: position - box.minY)
-        position += box.height + gap
+    var extent = units.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
+    let onCanvas = extent.intersection(canvas)
+    if !onCanvas.isNull, size(onCanvas) >= units.map { size($0.bounds) }.max() ?? 0 { extent = onCanvas }
+    let start = low(extent), span = size(extent)
+    let occupied = units.reduce(0) { $0 + size($1.bounds) }
+    var places: [CGFloat] = []
+    if occupied <= span {
+      let gap = (span - occupied) / CGFloat(units.count - 1)
+      var position = start
+      for unit in units {
+        places.append(position)
+        position += size(unit.bounds) + gap
       }
+    } else {
+      let first = start + size(units[0].bounds) / 2, last = start + span - size(units[units.count - 1].bounds) / 2
+      for (i, unit) in units.enumerated() {
+        let middle = first + (last - first) * CGFloat(i) / CGFloat(units.count - 1)
+        places.append(min(max(middle - size(unit.bounds) / 2, start), start + span - size(unit.bounds)))
+      }
+    }
+    for (unit, place) in zip(units, places) {
+      let delta = place - low(unit.bounds)
+      move(unit.ids, dx: horizontal ? delta : 0, dy: horizontal ? 0 : delta)
     }
   }
 

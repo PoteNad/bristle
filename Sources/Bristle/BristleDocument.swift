@@ -23,9 +23,14 @@ final class BristleDocument: NSDocument {
   /// Bristle drawings and PNGs can be written; other images are opened and saved as one of those.
   nonisolated static let writableTypeIdentifiers = [UTType.bristle.identifier, UTType.png.identifier]
 
+  /// What a new drawing started as, so one left blank closes without asking to be saved.
+  private var blank: Scene?
+
   override init() {
     super.init()
-    drawing.replace(Scene())
+    let scene = AppPreferences.newScene
+    blank = scene
+    drawing.replace(scene)
     drawing.undoManager = undoManager
   }
 
@@ -39,8 +44,8 @@ final class BristleDocument: NSDocument {
 
   /// A new drawing that's still blank closes without asking to be saved.
   override var isDocumentEdited: Bool {
-    // A frame or a background colour counts as a change, just as drawing does.
-    if fileURL == nil && drawing.scene == Scene() && original == nil { return false }
+    // A new canvas size or background counts as a change, just as drawing does.
+    if fileURL == nil && drawing.scene == blank && original == nil { return false }
     return super.isDocumentEdited
   }
 
@@ -86,14 +91,15 @@ final class BristleDocument: NSDocument {
     }
   }
 
-  /// A drawing of one image: the frame is the image's edges, with the image locked in place.
+  /// A drawing of one image: the canvas is the image's size, with the image locked in place on
+  /// it, as MS Paint opens a picture.
   nonisolated static func imageScene(_ data: Data, type: String) throws -> Scene {
     guard let size = ImageStore.pixelSize(of: data), size.width >= 1, size.height >= 1,
       ImageStore.decode(data) != nil
     else { throw CocoaError(.fileReadCorruptFile) }
     let file = ImageFile(type: type, data: data)
     let frame = CGRect(origin: .zero, size: size)
-    var scene = Scene(paper: Paper(frame: frame, resolution: ImageStore.resolution(of: data) ?? 72))
+    var scene = Scene(paper: Paper(size: size, background: nil, resolution: ImageStore.resolution(of: data) ?? 72))
     var image = Element(kind: .image)
     image.file = scene.addFile(file)
     image.frame = frame
@@ -193,7 +199,7 @@ final class BristleDocument: NSDocument {
     info.verticalPagination = .fit
     info.isHorizontallyCentered = true
     info.isVerticallyCentered = true
-    let area = drawing.scene.exportArea ?? .zero
+    let area = drawing.scene.canvas
     info.orientation = area.width > area.height ? .landscape : .portrait
     let view = PrintView(scene: drawing.scene)
     let operation = NSPrintOperation(view: view, printInfo: info)
@@ -328,7 +334,7 @@ final class PrintView: NSView {
 
   init(scene: Scene) {
     self.scene = scene
-    let area = scene.exportArea ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+    let area = scene.canvas
     super.init(frame: CGRect(origin: .zero, size: area.size))
     setBoundsOrigin(area.origin)
   }

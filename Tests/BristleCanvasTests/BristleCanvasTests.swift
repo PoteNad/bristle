@@ -79,7 +79,7 @@ func rectangle(_ frame: CGRect, id: String = Element.newID()) -> Element {
     pasteboard.setString("Hello from elsewhere", forType: .string)
     #expect(canvas.insert(from: pasteboard, at: .zero, name: "Paste"))
     #expect(drawing.scene.elements.last?.text == "Hello from elsewhere")
-    var scene = Scene(paper: Paper(frame: CGRect(x: 0, y: 0, width: 40, height: 20), background: .black))
+    var scene = Scene(paper: Paper(size: CGSize(width: 40, height: 20), background: .black))
     scene.elements = []
     let png = try #require(Renderer.image(scene).flatMap { Renderer.png($0) })
     pasteboard.clearContents()

@@ -9,8 +9,6 @@ final class SwatchButton: NSButton {
 
   var kind: Kind { didSet { needsDisplay = true } }
   var isChosen = false { didSet { needsDisplay = true } }
-  /// How a color shows on the canvas, so swatches match a dark canvas's colors.
-  var display: ((Color) -> Color)? { didSet { needsDisplay = true } }
   let side: CGFloat
 
   init(_ kind: Kind, side: CGFloat = 19) {
@@ -33,7 +31,22 @@ final class SwatchButton: NSButton {
     let shape = NSBezierPath(roundedRect: square, xRadius: radius, yRadius: radius)
     switch kind {
     case .color(let color?):
-      (NSColor(cgColor: (display?(color) ?? color).cgColor) ?? .black).setFill()
+      if color.alpha < 1 {
+        // A see-through colour shows over a checkerboard.
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        NSColor.white.setFill()
+        square.fill()
+        NSColor(white: 0.8, alpha: 1).setFill()
+        let cell = side / 4
+        for row in 0..<4 {
+          for column in 0..<4 where (row + column) % 2 == 0 {
+            NSRect(x: square.minX + CGFloat(column) * cell, y: square.minY + CGFloat(row) * cell, width: cell, height: cell).fill()
+          }
+        }
+        NSGraphicsContext.restoreGraphicsState()
+      }
+      (NSColor(cgColor: color.cgColor) ?? .black).setFill()
       shape.fill()
     case .color(nil):
       NSColor.controlBackgroundColor.setFill()
@@ -71,91 +84,121 @@ final class SwatchButton: NSButton {
   }
 }
 
-/// Every colour at once, hue across and lightness down, as a paint program's colour picker
-/// shows them: pale at the top, full in the middle, dark at the bottom. Clicking or dragging
-/// picks one, in the window rather than in a panel of its own.
+/// Any colour, as the pickers in Preview, Keynote, and Figma choose one: a square of the
+/// current hue, paler to the left and darker toward the bottom, and a strip of every hue under
+/// it. Clicking or dragging picks, in the window rather than in a panel of its own. A drag stays
+/// in the part it started in, held at its edges, so the pointer can wander off it.
 @MainActor
 final class SpectrumView: NSView {
-  var color: Color? { didSet { needsDisplay = true } }
+  private(set) var hue: CGFloat = 0
+  private(set) var saturation: CGFloat = 0
+  private(set) var brightness: CGFloat = 0
+  private var dragging: Part?
+  private enum Part { case square, hues }
+  static let barHeight: CGFloat = 14
+  static let gap: CGFloat = 10
+
   /// A colour is picked; `done` is true when the pointer is let go.
   var pick: ((Color, _ done: Bool) -> Void)?
-  private static var image: CGImage?
 
-  override var intrinsicContentSize: NSSize { NSSize(width: 236, height: 112) }
-  override var isFlipped: Bool { true }
-
-  static func color(atX x: CGFloat, y: CGFloat) -> Color {
-    let hue = min(1, max(0, x)), v = min(1, max(0, y))
-    let ns: NSColor
-    if v < 0.5 {
-      ns = NSColor(hue: hue, saturation: v * 2, brightness: 1, alpha: 1)
-    } else {
-      ns = NSColor(hue: hue, saturation: 1, brightness: 1 - (v - 0.5) * 2, alpha: 1)
+  /// The colour shown. Setting it keeps the hue for greys, which have none of their own, so
+  /// the square doesn't jump back to red.
+  var color: Color? {
+    get { Self.color(hue: hue, saturation: saturation, brightness: brightness) }
+    set {
+      guard dragging == nil, let newValue, let ns = NSColor(cgColor: newValue.cgColor)?.usingColorSpace(.sRGB) else {
+        needsDisplay = true
+        return
+      }
+      if ns.saturationComponent > 0.001 && ns.brightnessComponent > 0.001 { hue = ns.hueComponent }
+      saturation = ns.saturationComponent
+      brightness = ns.brightnessComponent
+      needsDisplay = true
     }
-    return Color(ns.cgColor) ?? .black
   }
 
-  /// Where a colour sits: its hue across, and its paleness or darkness down.
-  static func position(of color: Color) -> CGPoint? {
-    guard let ns = NSColor(cgColor: color.cgColor)?.usingColorSpace(.sRGB) else { return nil }
-    let s = ns.saturationComponent, b = ns.brightnessComponent
-    let y = b >= 0.999 ? s / 2 : 0.5 + (1 - b) / 2
-    return CGPoint(x: ns.hueComponent, y: y)
+  static func color(hue: CGFloat, saturation: CGFloat, brightness: CGFloat) -> Color {
+    Color(NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1).cgColor) ?? .black
   }
+
+  override var intrinsicContentSize: NSSize { NSSize(width: 236, height: 128 + Self.gap + Self.barHeight) }
+  override var isFlipped: Bool { true }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+  var square: NSRect { NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height - Self.barHeight - Self.gap) }
+  var hues: NSRect { NSRect(x: 0, y: bounds.height - Self.barHeight, width: bounds.width, height: Self.barHeight) }
 
   override func draw(_ dirtyRect: NSRect) {
-    let shape = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
-    NSGraphicsContext.saveGraphicsState()
-    shape.addClip()
-    if Self.image == nil {
-      let w = 120, h = 60
-      guard let context = CGContext(
-        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-      else { return }
-      for y in 0..<h {
-        for x in 0..<w {
-          context.setFillColor(Self.color(atX: CGFloat(x) / CGFloat(w - 1), y: 1 - CGFloat(y) / CGFloat(h - 1)).cgColor)
-          context.fill(CGRect(x: x, y: y, width: 1, height: 1))
-        }
-      }
-      Self.image = context.makeImage()
-    }
-    if let image = Self.image, let context = NSGraphicsContext.current?.cgContext {
-      context.interpolationQuality = .high
-      context.saveGState()
-      context.translateBy(x: 0, y: bounds.height)
-      context.scaleBy(x: 1, y: -1)
-      context.draw(image, in: bounds)
-      context.restoreGState()
-    }
-    NSGraphicsContext.restoreGraphicsState()
+    guard let context = NSGraphicsContext.current?.cgContext else { return }
+    let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    // The square: the hue, whitened to the left and darkened toward the bottom.
+    let squareShape = NSBezierPath(roundedRect: square, xRadius: 6, yRadius: 6)
+    context.saveGState()
+    squareShape.addClip()
+    context.setFillColor(Self.color(hue: hue, saturation: 1, brightness: 1).cgColor)
+    context.fill(square)
+    let white = CGGradient(colorsSpace: space, colors: [CGColor(gray: 1, alpha: 1), CGColor(gray: 1, alpha: 0)] as CFArray, locations: [0, 1])!
+    context.drawLinearGradient(white, start: CGPoint(x: square.minX, y: 0), end: CGPoint(x: square.maxX, y: 0), options: [])
+    let black = CGGradient(colorsSpace: space, colors: [CGColor(gray: 0, alpha: 0), CGColor(gray: 0, alpha: 1)] as CFArray, locations: [0, 1])!
+    context.drawLinearGradient(black, start: CGPoint(x: 0, y: square.minY), end: CGPoint(x: 0, y: square.maxY), options: [])
+    context.restoreGState()
     NSColor.tertiaryLabelColor.setStroke()
-    shape.lineWidth = 1
-    shape.stroke()
-    if let color, let p = Self.position(of: color) {
-      let center = NSPoint(x: p.x * bounds.width, y: p.y * bounds.height)
-      let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12))
-      ring.lineWidth = 2.5
-      NSColor.white.setStroke()
-      ring.stroke()
-      ring.lineWidth = 1
-      NSColor.black.withAlphaComponent(0.5).setStroke()
-      ring.stroke()
-    }
+    squareShape.lineWidth = 1
+    squareShape.stroke()
+    // Every hue.
+    let hueShape = NSBezierPath(roundedRect: hues, xRadius: Self.barHeight / 2, yRadius: Self.barHeight / 2)
+    context.saveGState()
+    hueShape.addClip()
+    let stops = (0...6).map { Self.color(hue: CGFloat($0) / 6, saturation: 1, brightness: 1).cgColor }
+    let rainbow = CGGradient(colorsSpace: space, colors: stops as CFArray, locations: (0...6).map { CGFloat($0) / 6 })!
+    context.drawLinearGradient(rainbow, start: CGPoint(x: hues.minX + hues.height / 2, y: 0), end: CGPoint(x: hues.maxX - hues.height / 2, y: 0), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+    context.restoreGState()
+    NSColor.tertiaryLabelColor.setStroke()
+    hueShape.lineWidth = 1
+    hueShape.stroke()
+    // Where the colour is.
+    knob(at: NSPoint(x: square.minX + saturation * square.width, y: square.minY + (1 - brightness) * square.height), fill: color)
+    let inset = hues.height / 2
+    knob(at: NSPoint(x: hues.minX + inset + hue * (hues.width - inset * 2), y: hues.midY), fill: Self.color(hue: hue, saturation: 1, brightness: 1))
+  }
+
+  private func knob(at center: NSPoint, fill: Color?) {
+    let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14))
+    if let fill { (NSColor(cgColor: fill.cgColor) ?? .black).setFill() }
+    ring.fill()
+    ring.lineWidth = 2.5
+    NSColor.white.setStroke()
+    ring.stroke()
+    let edge = NSBezierPath(ovalIn: NSRect(x: center.x - 8.25, y: center.y - 8.25, width: 16.5, height: 16.5))
+    edge.lineWidth = 0.75
+    NSColor.black.withAlphaComponent(0.35).setStroke()
+    edge.stroke()
   }
 
   private func choose(_ event: NSEvent, done: Bool) {
     let p = convert(event.locationInWindow, from: nil)
-    let picked = Self.color(atX: p.x / bounds.width, y: p.y / bounds.height)
-    color = picked
+    if dragging == nil { dragging = hues.insetBy(dx: 0, dy: -4).contains(p) ? .hues : .square }
+    func unit(_ value: CGFloat) -> CGFloat { min(1, max(0, value)) }
+    switch dragging {
+    case .hues:
+      let inset = hues.height / 2
+      hue = unit((p.x - hues.minX - inset) / (hues.width - inset * 2))
+      // Choosing a hue for a grey gives it colour, as the square would show it.
+      if saturation < 0.05 { saturation = 1 }
+      if brightness < 0.05 { brightness = 1 }
+    default:
+      saturation = unit((p.x - square.minX) / square.width)
+      brightness = 1 - unit((p.y - square.minY) / square.height)
+    }
+    needsDisplay = true
+    let picked = color ?? .black
+    if done { dragging = nil }
     pick?(picked, done)
   }
 
   override func mouseDown(with event: NSEvent) { choose(event, done: false) }
   override func mouseDragged(with event: NSEvent) { choose(event, done: false) }
   override func mouseUp(with event: NSEvent) { choose(event, done: true) }
-  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// Sends the system color panel's changes to whatever last opened it.
@@ -294,10 +337,13 @@ final class Controls {
   }
 
   /// What changes and what's shown: the tool, the kinds of object, and how many there are.
+  /// Choosing another brush, eraser, or shape changes what the controls show, not which
+  /// controls there are, so they're kept, and don't flicker or move.
   var key: String {
     guard let canvas else { return "" }
     let elements = self.elements
-    return "\(canvas.tool)|\(canvas.shapePreset?.rawValue ?? "")|\(canvas.lassoSelects)|\(kinds.map(\.rawValue).sorted())|\(elements.count)|\(elements.contains { !$0.groups.isEmpty })|\(elements.first?.brush.rawValue ?? "")|\(canvas.drawing.selectedElements.contains(where: \.locked))|\(canvas.frameSelected)"
+    let tool = Controls.brushes.contains(canvas.tool) ? "brush" : [.eraser, .strokeEraser].contains(canvas.tool) ? "eraser" : canvas.tool.rawValue
+    return "\(tool)|\(kinds.map(\.rawValue).sorted())|\(elements.count)|\(elements.contains { !$0.groups.isEmpty })|\(canvas.drawing.selectedElements.contains(where: \.locked))"
   }
 
   /// The brush of the selected strokes, as the tool that draws them.
@@ -327,7 +373,7 @@ final class Controls {
     case .watercolor: [10, 20, 36]
     case .oil: [8, 16, 28]
     case .eraser, .strokeEraser: [10, 24, 48]
-    default: [2, 4, 8]
+    default: [1.5, 3, 6]
     }
   }
 
@@ -336,7 +382,7 @@ final class Controls {
   var widthIndex: Int? {
     guard let canvas else { return nil }
     let tool = widthTool
-    let width = tool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style(for: Self.widened).strokeWidth
+    let width = tool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? Tool.eraser.defaultStyle.strokeWidth) : style(for: Self.widened).strokeWidth
     return Self.widths(for: tool).firstIndex { abs($0 - width) < 0.01 }
   }
 
@@ -349,7 +395,7 @@ final class Controls {
   /// The width now, of the eraser or of what's styled.
   var width: CGFloat {
     guard let canvas else { return 3 }
-    return widthTool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style(for: Self.widened).strokeWidth
+    return widthTool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? Tool.eraser.defaultStyle.strokeWidth) : style(for: Self.widened).strokeWidth
   }
 
   /// The widths the slider offers for the tool.
@@ -393,6 +439,10 @@ final class Controls {
     }
     refreshers.append { [weak self, weak slider, weak label] in
       guard let self else { return }
+      // Each brush has its own range of widths.
+      let range = Self.widthRange(for: self.widthTool)
+      slider?.minValue = Double(range.lowerBound)
+      slider?.maxValue = Double(range.upperBound)
       slider?.doubleValue = Double(self.width)
       let width = self.width
       label?.stringValue = width == width.rounded() ? "\(Int(width)) pt" : String(format: "%.1f pt", width)
@@ -422,9 +472,6 @@ final class Controls {
 
   var fillColor: Color? { canvas?.styles[.fill]?.stroke }
 
-  /// Shows colors as the canvas does, turned around on a dark canvas.
-  var display: (Color) -> Color { { [weak canvas] color in canvas?.shown(color) ?? color } }
-
   func setFillColor(_ color: Color?) {
     guard let canvas, let color else { return }
     canvas.styles[.fill, default: Tool.fill.defaultStyle].stroke = color
@@ -436,6 +483,9 @@ final class Controls {
   /// Gives a colour to something. `live` is true while a colour is being dragged out, so the
   /// changes make one undo step.
   typealias ColorApply = @MainActor (_ color: Color?, _ live: Bool) -> Void
+
+  /// What the none swatch is called: None, or Transparent for the canvas.
+  var noneTitle = "None"
 
   /// A row of swatches, a none swatch first when allowed, and a wheel for any other color.
   func colorRow(
@@ -470,15 +520,13 @@ final class Controls {
     var swatches: [SwatchButton] = []
     for color in choices {
       let swatch = SwatchButton(.color(color), side: side)
-      swatch.display = display
       wire(swatch) { _ in apply(color, false) }
-      swatch.toolTip = color.map { $0.name.prefix(1).uppercased() + $0.name.dropFirst() } ?? "None"
+      swatch.toolTip = color.map { $0.name.prefix(1).uppercased() + $0.name.dropFirst() } ?? noneTitle
       swatch.setAccessibilityLabel(swatch.toolTip)
       swatches.append(swatch)
     }
     // Any other colour, from a spectrum in a popover beside it; the swatch shows it once chosen.
     let custom = SwatchButton(.wheel, side: side)
-    custom.display = display
     wire(custom) { [weak self, weak custom] _ in
       guard let self, let custom else { return }
       self.showPicker(from: custom, value: value, apply: apply)

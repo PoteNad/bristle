@@ -40,38 +40,40 @@ public struct Scene: Equatable, Sendable {
     files = files.filter { used.contains($0.key) }
   }
 
-  /// The frame, if the drawing has one.
-  public var frame: CGRect? {
-    get { paper.frame }
-    set { paper.frame = newValue.map { $0.standardized.integral } }
-  }
-
-  /// What exports, prints, and copies cover: the frame, or else the drawing with a small margin.
-  public var exportArea: CGRect? {
-    if let frame = paper.frame { return frame }
-    let content = contentBounds
-    return content.isNull ? nil : content.insetBy(dx: -Paper.margin, dy: -Paper.margin).integral
-  }
+  /// The canvas: the page that's drawn on, exported, and printed, as MS Paint's is. It starts at
+  /// the origin; anything beyond it is kept but not shown.
+  public var canvas: CGRect { CGRect(origin: .zero, size: paper.size) }
 }
 
-/// The canvas a drawing is made on. It's endless; an optional frame marks the part that is
-/// exported and printed, as an opened image's own edges do.
+/// The canvas a drawing is made on: a page of a fixed size, which grows or shrinks when asked,
+/// as MS Paint's does.
 public struct Paper: Equatable, Sendable {
-  /// The part exported and printed, or `nil` for the whole drawing.
-  public var frame: CGRect?
-  /// The canvas color, or `nil` for none: the canvas follows the appearance on screen and is
-  /// transparent in exports unless they add one.
+  /// The canvas's size, in points, which are pixels in exported images.
+  public var size: CGSize {
+    didSet { size = Paper.clamped(size) }
+  }
+  /// The canvas's color, or `nil` for a transparent canvas, shown as a checkerboard.
   public var background: Color?
   /// Pixels per inch recorded in exported images, so a Retina screenshot keeps its size.
   public var resolution: CGFloat
 
-  /// The space kept around the drawing when there's no frame.
+  /// A new drawing's canvas.
+  public static let standardSize = CGSize(width: 1200, height: 800)
+  /// The space kept around the drawing when the canvas is fitted to it.
   public static let margin: CGFloat = 24
+  /// The largest side a canvas can have.
+  public static let maximumSide: CGFloat = 20_000
 
-  public init(frame: CGRect? = nil, background: Color? = nil, resolution: CGFloat = 72) {
-    self.frame = frame
+  public init(size: CGSize = Paper.standardSize, background: Color? = .white, resolution: CGFloat = 72) {
+    self.size = Paper.clamped(size)
     self.background = background
     self.resolution = resolution
+  }
+
+  /// Whole points, at least one and at most the largest side.
+  public static func clamped(_ size: CGSize) -> CGSize {
+    func side(_ value: CGFloat) -> CGFloat { value.isFinite ? min(maximumSide, max(1, value.rounded())) : 1 }
+    return CGSize(width: side(size.width), height: side(size.height))
   }
 }
 

@@ -4,8 +4,8 @@ import BristleCore
 import UniformTypeIdentifiers
 
 /// A document window: every tool in the toolbar, as in Excalidraw, in capsules as in Freeform;
-/// the endless canvas; bars over its bottom edge for zoom, the style of what's drawn or
-/// selected, and the canvas's options; and the Palette in a sidebar, like Plainst's symbols.
+/// the canvas, a page as MS Paint's is; bars over its bottom edge for zoom and the style of
+/// what's drawn or selected; and the Palette in a sidebar, like Plainst's symbols.
 @MainActor
 final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, NSToolbarDelegate,
   NSSharingServicePickerToolbarItemDelegate, CanvasViewDelegate
@@ -13,10 +13,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   let canvas: CanvasView
   let palette = Palette()
   let zoomBar = ZoomBar()
-  let canvasBar = CanvasBar()
   let styleBar = StyleBar()
   private weak var note: BristleDocument?
-  private(set) var toolGroups: [NSToolbarItemGroup] = []
+  /// The toolbar's tools, in order.
+  private(set) var toolButtons: [(slot: Slot, button: BarButton)] = []
   private let root = EditorView()
   private var paletteItem: NSSplitViewItem!
   private var inFullScreenTransition = false
@@ -44,7 +44,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     toolbar.delegate = self
     toolbar.displayMode = .iconOnly
     toolbar.allowsUserCustomization = false
-    toolbar.centeredItemIdentifiers = Set(Self.groups.map(\.id))
+    toolbar.centeredItemIdentifiers = Set(Self.toolItems)
     if #available(macOS 15.0, *) { toolbar.allowsDisplayModeCustomization = false }
     window.toolbar = toolbar
     window.toolbarStyle = .unified
@@ -53,24 +53,21 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     canvas.styles = AppPreferences.toolStyles
     canvas.configuration = AppPreferences.canvasConfiguration
     canvas.tool = .select
-    // Fitting the drawing leaves room for the bars at the bottom.
-    canvas.fitInsets = NSEdgeInsets(top: 32, left: 32, bottom: EditorView.margin * 2 + Bar.height, right: 32)
+    // Fitting the canvas leaves a margin around it, beyond the toolbar and the bars.
+    canvas.fitInsets = NSEdgeInsets(top: 24, left: 32, bottom: 12, right: 32)
     palette.canvas = canvas
     palette.editor = self
     zoomBar.canvas = canvas
-    canvasBar.canvas = canvas
-    canvasBar.editor = self
     styleBar.canvas = canvas
     styleBar.editor = self
 
     root.canvas = canvas.scrollView
     root.zoom = zoomBar.bar
-    root.options = canvasBar.bar
     root.style = styleBar.bar
     // Over the bars and the toolbar, the pointer is the arrow, not the tool's.
     canvas.coveredRects = { [weak self] in
       guard let self, let window = self.window else { return [] }
-      var rects = [self.zoomBar.bar, self.canvasBar.bar, self.styleBar.bar].filter { !$0.isHidden && $0.alphaValue > 0.1 && $0.window != nil }
+      var rects = [self.zoomBar.bar, self.styleBar.bar].filter { !$0.isHidden && $0.alphaValue > 0.1 && $0.window != nil }
         .map { $0.convert($0.bounds, to: nil) }
       let top = window.contentLayoutRect.maxY
       rects.append(NSRect(x: 0, y: top, width: window.frame.width, height: max(0, window.frame.height - top)))
@@ -213,7 +210,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   @objc private func defaultsDidChange() {
     canvas.configuration = AppPreferences.canvasConfiguration
-    canvasBar.update()
+    // Rulers coming or going change the room the canvas has.
+    root.needsLayout = true
     palette.update()
     updateStyleBarPlace()
     root.autoHides = UserDefaults.standard.bool(forKey: PreferenceKey.barsAutoHide) && !isAutomatedCheck
@@ -235,7 +233,6 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
         self?.paletteScheduled = false
         self?.palette.update()
         self?.styleBar.update()
-        self?.canvasBar.update()
       }
     }
   }
@@ -245,7 +242,6 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     palette.update()
     styleBar.update()
     zoomBar.update()
-    canvasBar.update()
     updateToolGroups()
   }
 
@@ -261,6 +257,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   ]
 
   static func slots(in id: NSToolbarItem.Identifier) -> [Slot] { groups.first { $0.id == id }?.slots ?? [] }
+  /// The tool groups with a gap between each, all centred over the canvas together.
+  static let toolItems: [NSToolbarItem.Identifier] = groups.enumerated().flatMap { i, group in
+    i == 0 ? [group.id] : [NSToolbarItem.Identifier("gap\(i)"), group.id]
+  }
   static let shareToolbarItem = NSToolbarItem.Identifier("share")
   static let paletteToolbarItem = NSToolbarItem.Identifier("palette")
 
@@ -272,12 +272,14 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     // The tools centre over the canvas, and Share and the Palette's button stay over the
     // Palette, so opening it doesn't push the tools off centre.
+    // A gap between groups keeps each in a capsule of its own.
+    let tools = Self.toolItems
     if #available(macOS 14.0, *) {
-      return [.flexibleSpace] + Self.groups.map(\.id) + [
+      return [.flexibleSpace] + tools + [
         .flexibleSpace, .inspectorTrackingSeparator, .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem,
       ]
     }
-    return [.flexibleSpace] + Self.groups.map(\.id) + [.flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
+    return [.flexibleSpace] + tools + [.flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -301,31 +303,11 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
   }
 
-  /// A tool's symbol; while it's the tool in use, a filled circle with the symbol cut out of it,
-  /// as Freeform marks its drawing tool.
-  /// Every tool's picture is the same size, on or off, so the toolbar never shifts as tools
-  /// are chosen, and its symbol stays the same size in the circle.
-  private func slotImage(_ slot: Slot, on: Bool) -> NSImage? {
+  /// A tool's symbol.
+  private func slotImage(_ slot: Slot) -> NSImage {
     let details = slotDetails(slot)
-    guard let symbol = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
-      .withSymbolConfiguration(.init(pointSize: 13, weight: on ? .semibold : .regular))
-    else { return nil }
-    let side: CGFloat = 26
-    let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-      let size = symbol.size
-      let place = NSRect(x: ((side - size.width) / 2).rounded(), y: ((side - size.height) / 2).rounded(), width: size.width, height: size.height)
-      if on {
-        NSColor.black.setFill()
-        NSBezierPath(ovalIn: rect).fill()
-        symbol.draw(in: place, from: .zero, operation: .destinationOut, fraction: 1)
-      } else {
-        symbol.draw(in: place)
-      }
-      return true
-    }
-    image.isTemplate = true
-    image.accessibilityDescription = on ? details.label + ", selected" : details.label
-    return image
+    return NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
+      .withSymbolConfiguration(.init(pointSize: 15, weight: .regular)) ?? NSImage()
   }
 
   func toolbar(
@@ -351,27 +333,34 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       item.isBordered = true
       return item
     }
+    if itemIdentifier.rawValue.hasPrefix("gap") {
+      let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+      let gap = NSView()
+      gap.widthAnchor.constraint(equalToConstant: 2).isActive = true
+      item.view = gap
+      item.isBordered = false
+      return item
+    }
     guard let spec = Self.groups.first(where: { $0.id == itemIdentifier }) else { return nil }
-    let slots = spec.slots
-    let group = NSToolbarItemGroup(
-      itemIdentifier: itemIdentifier, images: slots.map { slotImage($0, on: false)! }, selectionMode: .momentary,
-      labels: slots.map { slotDetails($0).label }, target: self, action: #selector(chooseSlot(_:)))
-    group.label = spec.label
-    group.paletteLabel = group.label
-    // Each tool acts on its own: on macOS 26 the toolbar draws the group, so there's no
-    // segmented control to ask which segment was clicked.
-    for (item, slot) in zip(group.subitems, slots) {
-      item.toolTip = slotDetails(slot).tip
-      item.tag = slot.rawValue
-      item.target = self
-      item.action = #selector(chooseSlotItem(_:))
+    // The tools are the bars' own buttons, so the one in use is marked with the same circle the
+    // pointer's highlight makes over any of them, as in the bars at the bottom.
+    let buttons = spec.slots.map { slot -> BarButton in
+      let details = slotDetails(slot)
+      let button = BarButton(image: slotImage(slot), title: details.tip, target: self, action: #selector(chooseSlotButton(_:)))
+      button.tag = slot.rawValue
+      button.setAccessibilityLabel(details.label)
+      toolButtons.append((slot, button))
+      return button
     }
-    if let control = group.view as? NSSegmentedControl {
-      for (i, slot) in slots.enumerated() { control.setToolTip(slotDetails(slot).tip, forSegment: i) }
-    }
-    toolGroups.append(group)
+    let row = NSStackView(views: buttons)
+    row.spacing = 2
+    row.edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 4)
+    let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+    item.view = row
+    item.label = spec.label
+    item.paletteLabel = spec.label
     DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.updateToolGroups() } }
-    return group
+    return item
   }
 
   var currentSlot: Slot? {
@@ -390,27 +379,16 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
   }
 
-  /// Shows which tool is in use in the toolbar.
+  /// Shows which tool is in use in the toolbar, and the brush Draw uses.
   private func updateToolGroups() {
     let current = currentSlot
-    for group in toolGroups {
-      let slots = Self.slots(in: group.itemIdentifier)
-      for (i, (item, slot)) in zip(group.subitems, slots).enumerated() {
-        let image = slotImage(slot, on: slot == current)
-        item.image = image
-        (group.view as? NSSegmentedControl)?.setImage(image, forSegment: i)
-      }
+    for (slot, button) in toolButtons {
+      button.isOn = slot == current
+      if slot == .draw { button.image = slotImage(.draw) }
     }
   }
 
-  @objc private func chooseSlot(_ sender: NSToolbarItemGroup) {
-    let slots = Self.slots(in: sender.itemIdentifier)
-    let index = (sender.view as? NSSegmentedControl)?.selectedSegment ?? -1
-    guard slots.indices.contains(index) else { return }
-    choose(slots[index], from: sender)
-  }
-
-  @objc func chooseSlotItem(_ sender: NSToolbarItem) {
+  @objc func chooseSlotButton(_ sender: NSButton) {
     guard let slot = Slot(rawValue: sender.tag) else { return }
     choose(slot, from: sender)
   }
@@ -427,7 +405,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     case .line: canvas.tool = .line
     case .arrow: canvas.tool = .arrow
     case .text: canvas.tool = .text
-    case .image: insertImage(sender)
+    case .image:
+      // Image is a command, not a tool: the tool in use stays marked.
+      updateToolGroups()
+      insertImage(sender)
     case .eyedropper: canvas.tool = .eyedropper
     }
     updateBars()
@@ -533,18 +514,20 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
   }
 
-  /// Canvas ▸ Frame Size: a sheet with the frame's size, common sizes, and which way it grows.
-  @objc func showFrameSize(_ sender: Any?) {
+  /// Canvas ▸ Canvas Size: a sheet with the canvas's size, common sizes, and where the drawing
+  /// stays as it grows or shrinks, as MS Paint's Resize does.
+  @objc func showCanvasSize(_ sender: Any?) {
     guard let window else { return }
-    let current = canvas.scene.frame?.size ?? canvas.scene.exportArea?.size ?? FrameSize.standard.size
+    let current = canvas.scene.paper.size
     let alert = NSAlert()
-    alert.messageText = canvas.scene.frame == nil ? "Add a Frame" : "Frame Size"
-    alert.addButton(withTitle: canvas.scene.frame == nil ? "Add Frame" : "Change")
+    alert.messageText = "Canvas Size"
+    alert.informativeText = "Sizes are in points, which are pixels in exported images."
+    alert.addButton(withTitle: "Change")
     alert.addButton(withTitle: "Cancel")
     let number = NumberFormatter()
     number.numberStyle = .decimal
     number.minimum = 1
-    number.maximum = 30_000
+    number.maximum = NSNumber(value: Double(Paper.maximumSide))
     number.maximumFractionDigits = 0
     let width = NSTextField(string: number.string(from: NSNumber(value: Double(current.width))) ?? "")
     let height = NSTextField(string: number.string(from: NSNumber(value: Double(current.height))) ?? "")
@@ -556,12 +539,12 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     height.setAccessibilityLabel("Height")
     let presets = NSPopUpButton()
     presets.addItem(withTitle: "Custom")
-    for size in FrameSize.allCases {
+    for size in CanvasSize.allCases {
       presets.addItem(withTitle: size.title)
       presets.lastItem?.representedObject = size.rawValue
     }
     let presetTarget = ClosureTarget { _ in
-      guard let name = presets.selectedItem?.representedObject as? String, let size = FrameSize(rawValue: name) else { return }
+      guard let name = presets.selectedItem?.representedObject as? String, let size = CanvasSize(rawValue: name) else { return }
       width.stringValue = number.string(from: NSNumber(value: Double(size.size.width))) ?? ""
       height.stringValue = number.string(from: NSNumber(value: Double(size.size.height))) ?? ""
     }
@@ -572,7 +555,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       [NSTextField(labelWithString: "Size:"), presets],
       [NSTextField(labelWithString: "Width:"), width],
       [NSTextField(labelWithString: "Height:"), height],
-      [NSTextField(labelWithString: "Anchor:"), anchor],
+      [NSTextField(labelWithString: "Keep drawing at:"), anchor],
     ])
     grid.rowSpacing = 8
     grid.columnSpacing = 8
@@ -588,18 +571,15 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
           let w = number.number(from: width.stringValue)?.doubleValue,
           let h = number.number(from: height.stringValue)?.doubleValue
         else { return }
-        let size = CGSize(width: w, height: h)
-        let name = self.canvas.scene.frame == nil ? "Add Frame" : "Frame Size"
-        self.canvas.drawing.edit(name) { $0.resizeFrame(to: size, anchor: anchor.anchor) }
+        self.canvas.resizeCanvas(to: CGSize(width: w, height: h), anchor: anchor.anchor)
       }
     }
   }
 
-  /// Canvas ▸ Background: none, so the canvas follows the appearance and exports are
-  /// transparent; white; or any color.
+  /// Canvas ▸ Background: white, transparent, or any color.
   @objc func chooseBackground(_ sender: NSMenuItem) {
     switch sender.tag {
-    case 0: canvas.drawing.edit("Clear Background") { $0.paper.background = nil }
+    case 0: canvas.drawing.edit("Transparent Background") { $0.paper.background = nil }
     case 1: canvas.drawing.edit("Background") { $0.paper.background = .white }
     default:
       ColorPanelRelay.open(canvas.scene.paper.background ?? .white) { [weak canvas] color in
@@ -637,14 +617,12 @@ extension Notification.Name {
   static let toolStylesDidChange = Notification.Name("BristleToolStylesDidChange")
 }
 
-/// The canvas under the window's bars: zoom at the bottom left, the canvas's options at the
-/// bottom right, and the style bar centred between them, raised above them when the window is
-/// too narrow for all three in a row.
+/// The canvas under the window's bars: zoom at the bottom left, and the style bar centred,
+/// raised above the zoom bar when the window is too narrow for both in a row.
 final class EditorView: NSView {
   static let margin: CGFloat = 14
   var canvas: NSView? { didSet { replace(oldValue, canvas, below: true) } }
   var zoom: NSView? { didSet { replace(oldValue, zoom) } }
-  var options: NSView? { didSet { replace(oldValue, options) } }
   var style: NSView? { didSet { replace(oldValue, style) } }
   var didLayout: (() -> Void)?
   /// Whether the bars show only when the pointer comes near the bottom of the window.
@@ -657,7 +635,7 @@ final class EditorView: NSView {
   }
   private var barsShown = true
 
-  private var bars: [NSView] { [zoom, options, style].compactMap { $0 } }
+  private var bars: [NSView] { [zoom, style].compactMap { $0 } }
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
@@ -701,28 +679,37 @@ final class EditorView: NSView {
     canvas?.frame = bounds
     let margin = Self.margin
     let inset = safeAreaInsets
-    var left = NSRect.zero, right = NSRect.zero
+    var left = NSRect.zero
     if let zoom {
       let size = zoom.fittingSize
       left = NSRect(x: inset.left + margin, y: inset.bottom + margin, width: size.width, height: size.height)
       zoom.frame = left
     }
-    if let options {
-      let size = options.fittingSize
-      right = NSRect(x: bounds.maxX - inset.right - margin - size.width, y: inset.bottom + margin, width: size.width, height: size.height)
-      options.frame = right
-    }
+    var top = left.maxY
     if let style, !style.isHidden {
       let size = style.fittingSize
       var frame = NSRect(x: ((bounds.width - size.width) / 2).rounded(), y: inset.bottom + margin, width: size.width, height: size.height)
-      if frame.minX < left.maxX + 8 || frame.maxX > right.minX - 8 { frame.origin.y = left.maxY + 8 }
+      if frame.minX < left.maxX + 8 || frame.maxX > bounds.maxX - left.maxX - 8 { frame.origin.y = left.maxY + 8 }
       style.frame = frame
+      top = max(top, frame.maxY)
+    }
+    // The canvas's edges can be scrolled clear of the toolbar and the bars.
+    if let scroll = canvas as? NSScrollView {
+      let insets = NSEdgeInsets(top: inset.top, left: 0, bottom: top + margin, right: 0)
+      if scroll.automaticallyAdjustsContentInsets { scroll.automaticallyAdjustsContentInsets = false }
+      if scroll.contentInsets.top != insets.top || scroll.contentInsets.bottom != insets.bottom || scroll.contentInsets.left != insets.left {
+        scroll.contentInsets = insets
+        // The canvas moves to suit the new room, centred if it fits.
+        let clip = scroll.contentView
+        clip.scroll(to: clip.constrainBoundsRect(clip.bounds).origin)
+        scroll.reflectScrolledClipView(clip)
+      }
     }
     didLayout?()
   }
 }
 
-/// Nine buttons choosing where the drawing stays when the frame changes size.
+/// Nine buttons choosing where the drawing stays when the canvas changes size.
 final class AnchorPicker: NSView {
   private(set) var anchor: Scene.Anchor = .topLeft
   private var buttons: [NSButton] = []

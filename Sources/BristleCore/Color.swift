@@ -54,17 +54,6 @@ public struct Color: Equatable, Hashable, Sendable {
   public static let black = Color(red: 0, green: 0, blue: 0)
   public static let clear = Color(red: 0, green: 0, blue: 0, alpha: 0)
 
-  /// How the colour is shown on a dark canvas: its lightness turned around, keeping its hue, as
-  /// Excalidraw's dark mode shows drawings. Only the view changes; files keep the colour itself.
-  public var onDarkCanvas: Color {
-    let high = max(red, green, blue), low = min(red, green, blue)
-    let lightness = (high + low) / 2
-    let target = 0.06 + 0.88 * (1 - lightness)
-    // Shift every channel by the same amount, which keeps the hue and most of the saturation.
-    let shift = target - lightness
-    return Color(red: red + shift, green: green + shift, blue: blue + shift, alpha: alpha)
-  }
-
   /// A plain name for the colour, for VoiceOver: "red", "light blue", "dark gray".
   public var name: String {
     let high = max(red, green, blue), low = min(red, green, blue)
