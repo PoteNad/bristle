@@ -187,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(view, "Zoom to Selection", #selector(CanvasView.zoomToSelection(_:)), "9", modifiers: [.command, .option])
     view.addItem(.separator())
     add(view, "Show Grid", #selector(Editor.toggleGrid(_:)), "'")
+    add(view, "Show Rulers", #selector(Editor.toggleRulers(_:)), "r")
     add(view, "Snap to Grid", #selector(Editor.toggleSnapToGrid(_:)), "'", modifiers: [.command, .shift])
     add(view, "Snap to Guides", #selector(Editor.toggleGuides(_:)))
     view.addItem(.separator())

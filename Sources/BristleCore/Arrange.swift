@@ -170,6 +170,38 @@ extension Scene {
     updateBindings(changed: ids)
   }
 
+  /// Stretches the elements from the box they fill to another, as the Palette's size fields
+  /// and dragging a selection's handles do. Line widths and text sizes stay as they are.
+  public mutating func resize(_ ids: Set<String>, from old: CGRect, to new: CGRect) {
+    guard old.width > 0, old.height > 0, new.width > 0, new.height > 0, old != new else { return }
+    let sx = new.width / old.width, sy = new.height / old.height
+    func map(_ p: CGPoint) -> CGPoint { CGPoint(x: new.minX + (p.x - old.minX) * sx, y: new.minY + (p.y - old.minY) * sy) }
+    for i in elements.indices where ids.contains(elements[i].id) {
+      var e = elements[i]
+      switch e.kind {
+      case .polygon, .line, .arrow, .freehand:
+        let rotation = e.rotation
+        e.rotation = 0
+        let center = e.center
+        let turned = e.points.isEmpty ? [] : e.worldPoints
+        e.setWorldPoints(turned.map(map))
+        if rotation != 0 {
+          // A turned shape keeps its turn about its moved centre.
+          let moved = map(center)
+          e.x += moved.x - e.center.x
+          e.y += moved.y - e.center.y
+          e.rotation = rotation
+        }
+      default:
+        let c = map(e.center)
+        let size = CGSize(width: max(1, e.width * sx), height: max(1, e.height * sy))
+        e.frame = CGRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height)
+      }
+      elements[i] = e
+    }
+    updateBindings(changed: ids)
+  }
+
   // MARK: Groups and locks
 
   /// Groups the elements, returning the new group's id.

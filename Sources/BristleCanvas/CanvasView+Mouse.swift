@@ -57,7 +57,7 @@ extension CanvasView {
     let tool = tabletEraser ? Tool.eraser : self.tool
     switch tool {
     case .select: selectDown(p, event)
-    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush:
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush, .crayon, .marker, .watercolor, .oil:
       let tablet = event.subtype == .tabletPoint
       interaction = .freehand(
         points: [p], pressures: [tablet ? CGFloat(event.pressure) : 1], tablet: tablet,
@@ -142,6 +142,16 @@ extension CanvasView {
         if let box = selectionBox() { interaction = .rotating(start: p, box: box, originals: originals) }
       case .point(let i):
         if let line = originals.first { interaction = .point(index: i, original: line) }
+      case .midpoint(let i):
+        // Dragging a segment's middle adds a point there, which bends the line, as in Excalidraw.
+        if var line = originals.first {
+          var points = line.worldPoints
+          points.insert(line.segmentMiddle(i), at: i + 1)
+          line.setWorldPoints(points)
+          let updated = line
+          drawing.live { $0[updated.id] = updated }
+          interaction = .point(index: i + 1, original: updated)
+        }
       }
       return
     }
@@ -167,6 +177,14 @@ extension CanvasView {
       interaction = .moving(
         start: p, originals: drawing.selectedElements, moved: false, copies: event.modifierFlags.contains(.option))
     } else {
+      // The frame's edges drag it bigger or smaller, without picking it first.
+      if !shift, let frame = scene.frame, let edge = frameEdge(at: p, frame) {
+        select([])
+        frameSelected = true
+        drawing.beginGesture()
+        interaction = .frameResizing(handle: edge, original: frame)
+        return
+      }
       if !shift {
         select([])
         enteredGroup = nil
@@ -575,6 +593,7 @@ extension CanvasView {
       }
       if draft.isLinear {
         draft.endBinding = scene.binding(at: p, excluding: draft.id, tolerance: 4 / magnification)
+        draft.bendIfStraight()
       }
       add(draft, name: "Add \(draft.kindName)")
     case .polygon(var points):
@@ -649,14 +668,14 @@ extension CanvasView {
       return
     }
     var pressures = tablet ? rawPressures : []
-    if brush == .pen && !tablet { pressures = Freehand.simulatedPressures(raw, size: width) }
+    if brush.usesPressure && !tablet { pressures = Freehand.simulatedPressures(raw, size: width) }
     let (smooth, smoothPressures) = Freehand.smoothed(raw, pressures: pressures)
     let (points, kept) = Freehand.simplify(smooth, pressures: smoothPressures, tolerance: 0.2 / magnification)
     var stroke = Element(kind: .freehand)
     style.apply(to: &stroke)
     stroke.brush = brush
     stroke.setWorldPoints(points)
-    stroke.pressures = brush == .pen ? kept : []
+    stroke.pressures = brush.usesPressure ? kept : []
     setNeedsDisplay(stroke.bounds.insetBy(dx: -width * 2, dy: -width * 2))
     drawing.edit("Draw") { $0.elements.append(stroke) }
   }
@@ -753,24 +772,24 @@ extension CanvasView {
       guard let brush = tool.brush else { return }
       let width = style.strokeWidth
       var pressures = tablet ? rawPressures : []
-      if brush == .pen && !tablet { pressures = Freehand.simulatedPressures(raw, size: width) }
+      if brush.usesPressure && !tablet { pressures = Freehand.simulatedPressures(raw, size: width) }
       let (points, smoothPressures) = brush == .pixel ? (Freehand.pixels(raw, size: width), []) : Freehand.smoothed(raw, pressures: pressures)
-      context.saveGState()
-      if brush == .pixel { context.setShouldAntialias(false) }
-      context.setAlpha(style.opacity)
-      context.setFillColor(shown(style.stroke ?? .ink).cgColor)
-      context.addPath(Freehand.outline(points, pressures: smoothPressures, size: width, brush: brush))
-      context.fillPath(using: .winding)
-      context.restoreGState()
+      // Drawn as it will be, texture and all.
+      var stroke = Element(kind: .freehand)
+      style.apply(to: &stroke)
+      stroke.brush = brush
+      stroke.setWorldPoints(points)
+      stroke.pressures = smoothPressures
+      Renderer.draw(shown(stroke), in: context, scene: scene, images: images)
     case .shape(_, let draft):
-      Renderer.draw(draft, in: context, scene: scene, images: images)
+      Renderer.draw(shown(draft), in: context, scene: scene, images: images)
     case .polygon(let points):
       var draft = Element(kind: .polygon)
       (styles[.polygon] ?? Tool.polygon.defaultStyle).apply(to: &draft)
       draft.fill = nil
       draft.kind = .line
       draft.setWorldPoints(points)
-      Renderer.draw(draft, in: context, scene: scene, images: images)
+      Renderer.draw(shown(draft), in: context, scene: scene, images: images)
       if let first = points.first {
         drawHandle(at: first, round: true, in: context, scale: scale, color: accent.cgColor)
       }

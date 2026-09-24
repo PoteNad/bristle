@@ -8,6 +8,8 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
   let isNew: Bool
   weak var canvas: CanvasView?
   private let ownUndo = UndoManager()
+  /// A colour just chosen in the colour panel, to give the text.
+  private var pickedColor: Color?
 
   init(element: Element, canvas: CanvasView, isNew: Bool) {
     elementID = element.id
@@ -45,18 +47,33 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
   func apply(_ element: Element) {
     let font = NSFont(name: element.fontName, size: element.fontSize) ?? .systemFont(ofSize: element.fontSize)
     self.font = font
-    textColor = (element.stroke ?? .ink).cgColor.nsColor
+    // Shown as the canvas shows it, so dark text reads light on a dark canvas while typing.
+    let shown = canvas?.shown(element) ?? element
+    textColor = (shown.stroke ?? .ink).cgColor.nsColor
     alignment = [.left: .left, .center: .center, .right: .right][element.textAlign] ?? .left
     typingAttributes[.font] = font
     typingAttributes[.foregroundColor] = textColor
-    if let fill = element.fill {
+    if let fill = shown.fill {
       drawsBackground = true
       backgroundColor = fill.cgColor.nsColor
     } else {
       drawsBackground = false
     }
     insertionPointColor = textColor ?? .labelColor
+    appliedStyle = styleKey(element)
     follow(element)
+  }
+
+  private var appliedStyle = ""
+
+  private func styleKey(_ e: Element) -> String {
+    "\(e.stroke?.hex ?? "")|\(e.fill?.hex ?? "")|\(e.fontName)|\(e.fontSize)|\(e.textAlign)|\(canvas?.isDarkCanvas == true)"
+  }
+
+  /// Takes up a change of colour, font, or alignment made while typing, from the bar or the
+  /// Palette.
+  func refresh(_ element: Element) {
+    if styleKey(element) != appliedStyle { apply(element) } else { follow(element) }
   }
 
   /// Keeps the view over the element as its frame changes.
@@ -74,8 +91,11 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
     guard let canvas else { return }
     let text = string
     let font = self.font ?? .systemFont(ofSize: 24)
-    let color = textColor.flatMap { Color($0.cgColor) }
     let systemName = NSFont.systemFont(ofSize: font.pointSize).fontName
+    // The view shows the colour as the canvas does, which isn't the colour itself, so a colour
+    // is only taken from the colour panel.
+    let color = pickedColor
+    pickedColor = nil
     canvas.drawing.live { scene in
       guard var e = scene[self.elementID] else { return }
       e.text = text
@@ -108,8 +128,10 @@ final class TextEditor: NSTextView, NSTextViewDelegate {
   }
 
   override func changeColor(_ sender: Any?) {
+    pickedColor = (sender as? NSColorPanel).flatMap { Color($0.color.cgColor) }
     super.changeColor(sender)
     textDidChange(Notification(name: NSText.didChangeNotification))
+    if let element = canvas?.scene[elementID] { apply(element) }
   }
 
   override func changeFont(_ sender: Any?) {

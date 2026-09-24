@@ -32,6 +32,8 @@ enum Handle: Equatable {
   case resize(Int)
   case rotate
   case point(Int)
+  /// The middle of the segment after point `i`, dragged to bend a line.
+  case midpoint(Int)
 }
 
 extension CanvasView {
@@ -93,6 +95,11 @@ extension CanvasView {
       for (i, p) in line.worldPoints.enumerated().reversed() where p.distance(to: point) <= reach + 2 / magnification {
         return .point(i)
       }
+      if line.isLinear {
+        for i in 0..<max(0, line.points.count - 1) where line.segmentMiddle(i).distance(to: point) <= reach {
+          return .midpoint(i)
+        }
+      }
       if line.isLinear { return nil }
     }
     guard let box = selectionBox() else { return nil }
@@ -112,6 +119,25 @@ extension CanvasView {
       let p = box.point(SelectionBox.units[i])
       return abs(p.x - point.x) <= reach && abs(p.y - point.y) <= reach
     }
+  }
+
+  /// Which of the frame's edges or corners is under a point, to drag it, as MS Paint's page is
+  /// resized by its edges. Numbered as the selection's handles are.
+  func frameEdge(at p: CGPoint, _ frame: CGRect) -> Int? {
+    let reach = 5 / magnification, corner = 9 / magnification
+    let near = { (a: CGFloat, b: CGFloat, r: CGFloat) in abs(a - b) <= r }
+    let left = near(p.x, frame.minX, corner), right = near(p.x, frame.maxX, corner)
+    let top = near(p.y, frame.minY, corner), bottom = near(p.y, frame.maxY, corner)
+    if top && left { return 0 }
+    if top && right { return 2 }
+    if bottom && right { return 4 }
+    if bottom && left { return 6 }
+    let across = p.x > frame.minX && p.x < frame.maxX, down = p.y > frame.minY && p.y < frame.maxY
+    if across && near(p.y, frame.minY, reach) { return 1 }
+    if across && near(p.y, frame.maxY, reach) { return 5 }
+    if down && near(p.x, frame.minX, reach) { return 7 }
+    if down && near(p.x, frame.maxX, reach) { return 3 }
+    return nil
   }
 
   func drawFrameHandles(_ frame: CGRect, in context: CGContext, scale: CGFloat) {
@@ -172,6 +198,21 @@ extension CanvasView {
         context.restoreGState()
       }
       for p in points { drawHandle(at: p, round: true, in: context, scale: scale, color: color) }
+      // Faint handles in the middle of each segment, to drag and bend it.
+      if line.isLinear, !locked {
+        context.saveGState()
+        context.setAlpha(0.55)
+        for i in 0..<max(0, points.count - 1) {
+          let m = line.segmentMiddle(i)
+          let r = handleSize * 0.35
+          context.setFillColor(NSColor.white.cgColor)
+          context.fillEllipse(in: CGRect(x: m.x - r, y: m.y - r, width: r * 2, height: r * 2))
+          context.setStrokeColor(color)
+          context.setLineWidth(1 / scale)
+          context.strokeEllipse(in: CGRect(x: m.x - r, y: m.y - r, width: r * 2, height: r * 2))
+        }
+        context.restoreGState()
+      }
       if line.isLinear { return }
     }
     guard let box = selectionBox() else { return }
@@ -195,6 +236,35 @@ extension CanvasView {
   /// a line, around the outside of a shape, and around the box of text or an image.
   func drawHalo(_ element: Element, in context: CGContext, scale: CGFloat) {
     let gap = 5 / scale, width = 1.5 / scale
+    // Only what's being redrawn.
+    guard element.bounds.insetBy(dx: -gap * 3, dy: -gap * 3).intersects(context.boundingBoxOfClipPath) else { return }
+    let pieces: [CGPath]
+    if let cached = haloCache[element.id], cached.element == element, cached.scale == scale {
+      pieces = cached.pieces
+    } else {
+      pieces = haloPieces(element, gap: gap)
+      haloCache[element.id] = (element, scale, pieces)
+    }
+    context.saveGState()
+    defer { context.restoreGState() }
+    // The dots are drawn along every edge, then the inside is cleared, so only the outer edge
+    // shows, however the pieces overlap.
+    context.beginTransparencyLayer(auxiliaryInfo: nil)
+    context.setStrokeColor(NSColor.secondaryLabelColor.cgColor)
+    context.setLineWidth(width * 2)
+    context.setLineCap(.round)
+    context.setLineDash(phase: 0, lengths: [0, 4 / scale])
+    for piece in pieces { context.addPath(piece) }
+    context.strokePath()
+    context.setBlendMode(.clear)
+    for piece in pieces {
+      context.addPath(piece)
+      context.fillPath(using: .winding)
+    }
+    context.endTransparencyLayer()
+  }
+
+  private func haloPieces(_ element: Element, gap: CGFloat) -> [CGPath] {
     // The pieces the halo goes around, each filled on its own, since a shape and the band
     // around its edge can turn opposite ways.
     var pieces: [CGPath] = []
@@ -218,23 +288,7 @@ extension CanvasView {
       for head in element.arrowheads { pieces.append(band(head.path, stroke + gap * 2)) }
     }
     if element.rotation != 0 { pieces = pieces.map { $0.copy(using: [element.transform]) ?? $0 } }
-    context.saveGState()
-    defer { context.restoreGState() }
-    // The dots are drawn along every edge, then the inside is cleared, so only the outer edge
-    // shows, however the pieces overlap.
-    context.beginTransparencyLayer(auxiliaryInfo: nil)
-    context.setStrokeColor(NSColor.secondaryLabelColor.cgColor)
-    context.setLineWidth(width * 2)
-    context.setLineCap(.round)
-    context.setLineDash(phase: 0, lengths: [0, 4 / scale])
-    for piece in pieces { context.addPath(piece) }
-    context.strokePath()
-    context.setBlendMode(.clear)
-    for piece in pieces {
-      context.addPath(piece)
-      context.fillPath(using: .winding)
-    }
-    context.endTransparencyLayer()
+    return pieces
   }
 
   func drawHandle(

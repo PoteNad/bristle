@@ -67,6 +67,9 @@ final class Bar: NSView {
 
   var buttons: [NSButton] { row.arrangedSubviews.compactMap { $0 as? NSButton } }
 
+  /// Faded out, a bar lets clicks through to the canvas.
+  override func hitTest(_ point: NSPoint) -> NSView? { alphaValue < 0.1 ? nil : super.hitTest(point) }
+
   /// A thin line between groups of controls.
   static func divider() -> NSView {
     let line = NSBox()
@@ -228,7 +231,7 @@ func popUpAbove(_ menu: NSMenu, from view: NSView) {
 
 /// Shows a popover above a bar button.
 @MainActor
-func popoverAbove(_ content: NSView, from view: NSView) -> NSPopover {
+func popoverAbove(_ content: NSView, from view: NSView, edge: NSRectEdge = .maxY) -> NSPopover {
   // The popover sizes itself to its view, so the content sits in a container with margins
   // and a size of its own.
   let container = NSView()
@@ -249,7 +252,11 @@ func popoverAbove(_ content: NSView, from view: NSView) -> NSPopover {
   popover.contentViewController = controller
   popover.behavior = .transient
   popover.animates = !AppPreferences.isAutomatedCheck
-  popover.show(relativeTo: view.bounds, of: view, preferredEdge: view.isFlipped ? .minY : .maxY)
+  // Above the view unless asked otherwise, whichever way up it is.
+  let above = edge == .maxY
+  popover.show(relativeTo: view.bounds, of: view, preferredEdge: view.isFlipped == above ? .minY : .maxY)
+  // Nothing in it takes the keyboard until clicked, so typing still goes to the canvas.
+  container.window?.makeFirstResponder(nil)
   return popover
 }
 
@@ -404,6 +411,15 @@ final class StyleBar: NSObject {
   private var popoverControls: Controls?
   private(set) weak var popover: NSPopover?
   private var builtFor = ""
+  /// Kept out of the way, while the Palette shows everything it would.
+  var suppressed = false {
+    didSet {
+      guard suppressed != oldValue else { return }
+      if suppressed { popover?.close() }
+      bar.isHidden = suppressed || bar.row.arrangedSubviews.isEmpty
+      bar.superview?.needsLayout = true
+    }
+  }
 
   func update() {
     guard let canvas else { return }
@@ -487,18 +503,18 @@ final class StyleBar: NSObject {
       // Colors.
       var colors: [NSView] = []
       if !selecting && tool == .fill {
-        colors.append(swatch("Fill Color", allowsNone: false, value: { [weak c] in c?.fillColor }) { [weak c] in c?.setFillColor($0) })
+        colors.append(swatch("Fill Color", allowsNone: false, value: { [weak c] in c?.fillColor }) { [weak c] color, _ in c?.setFillColor(color) })
       }
       if !kinds.isEmpty && kinds != [.image] {
         let none = c.hasShapes && !kinds.contains(.freehand) && !c.hasLines
         colors.append(swatch(kinds == [.text] ? "Text Color" : "Stroke Color", allowsNone: none, opacity: true, value: {
-          [weak c] in c?.style.stroke
-        }) { [weak canvas] color in canvas?.setStyle("Change Color") { $0.stroke = color } })
+          [weak c] in c?.strokeColor
+        }) { [weak c] color, live in c?.setStroke(color, live: live) })
       }
       if c.hasShapes || kinds == [.text] {
         colors.append(swatch(kinds == [.text] ? "Background Color" : "Fill Color", allowsNone: true, value: { [weak c] in
-          c?.style.fill
-        }) { [weak canvas] color in canvas?.setStyle("Change Fill") { $0.fill = color } })
+          c?.fillColor2
+        }) { [weak c] color, live in c?.setFill(color, live: live) })
       }
       group(colors)
       // Widths, and the line's style.
@@ -521,7 +537,7 @@ final class StyleBar: NSObject {
           let button = BarButton(image: Controls.arrowImage(.none, start: start), title: start ? "Start Arrowhead" : "End Arrowhead", target: nil, action: nil)
           c.onRefresh { [weak c, weak button] in
             guard let c else { return }
-            button?.image = Controls.arrowImage(start ? c.style.startArrowhead : c.style.endArrowhead, start: start)
+            button?.image = Controls.arrowImage(start ? c.style(for: Controls.lined).startArrowhead : c.style(for: Controls.lined).endArrowhead, start: start)
           }
           line.append(action(button) { [weak canvas] sender in
             let menu = NSMenu(title: "Arrowhead")
@@ -544,29 +560,29 @@ final class StyleBar: NSObject {
       if kinds.contains(.text) {
         let font = BarButton(text: "Sans", tip: "Font", menu: true, target: nil, action: nil)
         c.onRefresh { [weak c, weak font] in
-          font?.setText(Controls.fonts.first { $0.name == c?.style.fontName }?.title ?? "Font", menu: true)
+          font?.setText(Controls.fonts.first { $0.name == c?.style(for: Controls.texts).fontName }?.title ?? "Font", menu: true)
         }
         let size = BarButton(text: "M", tip: "Text Size", menu: true, target: nil, action: nil)
         c.onRefresh { [weak c, weak size] in
           guard let c else { return }
-          size?.setText("\(Int(c.style.fontSize.rounded()))", menu: true)
+          size?.setText("\(Int(c.style(for: Controls.texts).fontSize.rounded()))", menu: true)
         }
         let align = BarButton(symbol: "text.alignleft", title: "Text Alignment", target: nil, action: nil)
         let symbols = ["text.alignleft", "text.aligncenter", "text.alignright"]
         c.onRefresh { [weak c, weak align] in
-          guard let c, let i = Element.TextAlign.allCases.firstIndex(of: c.style.textAlign) else { return }
+          guard let c, let i = Element.TextAlign.allCases.firstIndex(of: c.style(for: Controls.texts).textAlign) else { return }
           align?.image = NSImage(systemSymbolName: symbols[i], accessibilityDescription: "Text Alignment")?
             .withSymbolConfiguration(.init(pointSize: 15, weight: .medium))
         }
         group([
           action(font) { [weak canvas, weak c] sender in
-            popUpAbove(Self.menu(Controls.fonts.map(\.title), chosen: Controls.fonts.firstIndex { $0.name == c?.style.fontName }) { i in
+            popUpAbove(Self.menu(Controls.fonts.map(\.title), chosen: Controls.fonts.firstIndex { $0.name == c?.style(for: Controls.texts).fontName }) { i in
               canvas?.setStyle("Change Font") { $0.fontName = Controls.fonts[i].name }
             }, from: sender)
           },
           action(size) { [weak canvas, weak c] sender in
             let sizes = Controls.pointSizes
-            popUpAbove(Self.menu(sizes.map { "\(Int($0)) pt" }, chosen: sizes.firstIndex { abs($0 - (c?.style.fontSize ?? 0)) < 0.01 }) { i in
+            popUpAbove(Self.menu(sizes.map { "\(Int($0)) pt" }, chosen: sizes.firstIndex { abs($0 - (c?.style(for: Controls.texts).fontSize ?? 0)) < 0.01 }) { i in
               canvas?.setStyle("Change Font Size") { $0.fontSize = sizes[i] }
             }, from: sender)
           },
@@ -593,7 +609,7 @@ final class StyleBar: NSObject {
       }
     }
     bar.set(views)
-    bar.isHidden = views.isEmpty
+    bar.isHidden = views.isEmpty || suppressed
   }
 
   // MARK: Pieces
@@ -611,7 +627,7 @@ final class StyleBar: NSObject {
 
   private func swatch(
     _ title: String, allowsNone: Bool, opacity: Bool = false, value: @escaping @MainActor () -> Color??,
-    apply: @escaping @MainActor (Color?) -> Void
+    apply: @escaping Controls.ColorApply
   ) -> BarSwatch {
     let swatch = BarSwatch(tip: title)
     swatch.display = controls.display
@@ -620,7 +636,12 @@ final class StyleBar: NSObject {
       guard let self, let canvas = self.canvas else { return }
       let popover = Controls()
       popover.canvas = canvas
+      // The swatches, and any colour from the spectrum below them, all in the window.
       var rows: [(String, NSView)] = [(title, popover.colorGrid(allowsNone: allowsNone, value: value, apply: apply))]
+      rows.append(("", popover.colorPicker(value: value) { [weak popover] color, live in
+        apply(color, live)
+        popover?.refresh()
+      }))
       if opacity { rows.append(("Opacity", popover.opacitySlider())) }
       self.show(popover, rows, from: sender)
     }

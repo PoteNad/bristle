@@ -73,11 +73,7 @@ public enum Renderer {
     if element.rotation != 0 { context.concatenate(element.transform) }
     switch element.kind {
     case .freehand:
-      // Pixels keep hard edges, as they would in a paint program.
-      if element.brush == .pixel { context.setShouldAntialias(false) }
-      context.setFillColor((element.stroke ?? .ink).cgColor)
-      context.addPath(element.path)
-      context.fillPath(using: .winding)
+      drawInk(element, in: context)
     case .text:
       if let fill = element.fill {
         context.setFillColor(fill.cgColor)
@@ -113,6 +109,95 @@ public enum Renderer {
       }
     }
   }
+
+  /// A freehand stroke, with the texture of its brush.
+  public static func drawInk(_ element: Element, path known: CGPath? = nil, in context: CGContext) {
+    let color = (element.stroke ?? .ink).cgColor
+    let path = known ?? element.path
+    context.setFillColor(color)
+    switch element.brush {
+    case .pixel:
+      // Pixels keep hard edges, as they would in a paint program.
+      context.setShouldAntialias(false)
+      context.addPath(path)
+      context.fillPath()
+    case .crayon:
+      // The colour, with a grain rubbed out of it, as wax skips over paper.
+      context.beginTransparencyLayer(auxiliaryInfo: nil)
+      context.addPath(path)
+      context.fillPath()
+      context.addPath(path)
+      context.clip()
+      context.setBlendMode(.destinationOut)
+      context.draw(grain, in: CGRect(x: 0, y: 0, width: 48, height: 48), byTiling: true)
+      context.endTransparencyLayer()
+    case .marker:
+      // One flat layer, so the stroke doesn't darken where it crosses itself.
+      context.setAlpha(0.85)
+      context.beginTransparencyLayer(auxiliaryInfo: nil)
+      context.addPath(path)
+      context.fillPath()
+      context.endTransparencyLayer()
+    case .watercolor:
+      // A thin wash, one layer so it doesn't darken where it crosses itself, that bleeds softly
+      // at its edges.
+      context.setShadow(offset: .zero, blur: max(1, element.strokeWidth * 0.3), color: color.copy(alpha: 0.6))
+      context.setAlpha(0.5)
+      context.beginTransparencyLayer(auxiliaryInfo: nil)
+      context.addPath(path)
+      context.fillPath()
+      context.endTransparencyLayer()
+    case .oil:
+      // Thick paint, with light and dark streaks along the stroke where the bristles pull.
+      context.addPath(path)
+      context.fillPath()
+      let centre = element.points.map { CGPoint(x: $0.x + element.x, y: $0.y + element.y) }
+      guard centre.count > 1 else { break }
+      context.saveGState()
+      context.addPath(path)
+      context.clip()
+      let r = element.strokeWidth / 2
+      for (offset, light) in [(-0.55, true), (-0.15, false), (0.3, true), (0.65, false)] as [(CGFloat, Bool)] {
+        let streak = CGMutablePath()
+        for (i, p) in centre.enumerated() {
+          let a = centre[max(0, i - 1)], b = centre[min(centre.count - 1, i + 1)]
+          let length = max(hypot(b.x - a.x, b.y - a.y), 0.0001)
+          let q = CGPoint(x: p.x - (b.y - a.y) / length * r * offset, y: p.y + (b.x - a.x) / length * r * offset)
+          if i == 0 { streak.move(to: q) } else { streak.addLine(to: q) }
+        }
+        context.addPath(streak)
+        context.setStrokeColor(light ? CGColor(gray: 1, alpha: 0.22) : CGColor(gray: 0, alpha: 0.18))
+        context.setLineWidth(max(0.5, r * 0.18))
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.strokePath()
+      }
+      context.restoreGState()
+    default:
+      context.addPath(path)
+      context.fillPath(using: .winding)
+    }
+  }
+
+  /// Speckles of paper for crayon, the same every time.
+  nonisolated(unsafe) static let grain: CGImage = {
+    let side = 48
+    let context = CGContext(
+      data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    var seed: UInt64 = 11
+    for y in 0..<side {
+      for x in 0..<side {
+        seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        let v = CGFloat(seed >> 11) / CGFloat(1 << 53)
+        // Mostly solid colour, with a scatter of gaps.
+        guard v > 0.72 else { continue }
+        context.setFillColor(CGColor(gray: 0, alpha: 0.45 + (v - 0.72) / 0.28 * 0.55))
+        context.fill(CGRect(x: x, y: y, width: 1, height: 1))
+      }
+    }
+    return context.makeImage()!
+  }()
 
   static func strokeOutline(_ element: Element, in context: CGContext) {
     guard let stroke = element.stroke, element.strokeWidth > 0 else { return }

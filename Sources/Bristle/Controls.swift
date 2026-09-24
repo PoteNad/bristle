@@ -71,6 +71,93 @@ final class SwatchButton: NSButton {
   }
 }
 
+/// Every colour at once, hue across and lightness down, as a paint program's colour picker
+/// shows them: pale at the top, full in the middle, dark at the bottom. Clicking or dragging
+/// picks one, in the window rather than in a panel of its own.
+@MainActor
+final class SpectrumView: NSView {
+  var color: Color? { didSet { needsDisplay = true } }
+  /// A colour is picked; `done` is true when the pointer is let go.
+  var pick: ((Color, _ done: Bool) -> Void)?
+  private static var image: CGImage?
+
+  override var intrinsicContentSize: NSSize { NSSize(width: 236, height: 112) }
+  override var isFlipped: Bool { true }
+
+  static func color(atX x: CGFloat, y: CGFloat) -> Color {
+    let hue = min(1, max(0, x)), v = min(1, max(0, y))
+    let ns: NSColor
+    if v < 0.5 {
+      ns = NSColor(hue: hue, saturation: v * 2, brightness: 1, alpha: 1)
+    } else {
+      ns = NSColor(hue: hue, saturation: 1, brightness: 1 - (v - 0.5) * 2, alpha: 1)
+    }
+    return Color(ns.cgColor) ?? .black
+  }
+
+  /// Where a colour sits: its hue across, and its paleness or darkness down.
+  static func position(of color: Color) -> CGPoint? {
+    guard let ns = NSColor(cgColor: color.cgColor)?.usingColorSpace(.sRGB) else { return nil }
+    let s = ns.saturationComponent, b = ns.brightnessComponent
+    let y = b >= 0.999 ? s / 2 : 0.5 + (1 - b) / 2
+    return CGPoint(x: ns.hueComponent, y: y)
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    let shape = NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6)
+    NSGraphicsContext.saveGraphicsState()
+    shape.addClip()
+    if Self.image == nil {
+      let w = 120, h = 60
+      guard let context = CGContext(
+        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      else { return }
+      for y in 0..<h {
+        for x in 0..<w {
+          context.setFillColor(Self.color(atX: CGFloat(x) / CGFloat(w - 1), y: 1 - CGFloat(y) / CGFloat(h - 1)).cgColor)
+          context.fill(CGRect(x: x, y: y, width: 1, height: 1))
+        }
+      }
+      Self.image = context.makeImage()
+    }
+    if let image = Self.image, let context = NSGraphicsContext.current?.cgContext {
+      context.interpolationQuality = .high
+      context.saveGState()
+      context.translateBy(x: 0, y: bounds.height)
+      context.scaleBy(x: 1, y: -1)
+      context.draw(image, in: bounds)
+      context.restoreGState()
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    NSColor.tertiaryLabelColor.setStroke()
+    shape.lineWidth = 1
+    shape.stroke()
+    if let color, let p = Self.position(of: color) {
+      let center = NSPoint(x: p.x * bounds.width, y: p.y * bounds.height)
+      let ring = NSBezierPath(ovalIn: NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12))
+      ring.lineWidth = 2.5
+      NSColor.white.setStroke()
+      ring.stroke()
+      ring.lineWidth = 1
+      NSColor.black.withAlphaComponent(0.5).setStroke()
+      ring.stroke()
+    }
+  }
+
+  private func choose(_ event: NSEvent, done: Bool) {
+    let p = convert(event.locationInWindow, from: nil)
+    let picked = Self.color(atX: p.x / bounds.width, y: p.y / bounds.height)
+    color = picked
+    pick?(picked, done)
+  }
+
+  override func mouseDown(with event: NSEvent) { choose(event, done: false) }
+  override func mouseDragged(with event: NSEvent) { choose(event, done: false) }
+  override func mouseUp(with event: NSEvent) { choose(event, done: true) }
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// Sends the system color panel's changes to whatever last opened it.
 @MainActor
 final class ColorPanelRelay: NSObject {
@@ -122,7 +209,7 @@ final class Controls {
   static let sizes: [(String, CGFloat)] = [("S", 16), ("M", 24), ("L", 36), ("XL", 56)]
   /// Every text size the size menu offers.
   static let pointSizes: [CGFloat] = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 56, 64, 72, 96, 128]
-  static let brushes: [Tool] = [.pencil, .pen, .highlighter, .calligraphy, .airbrush, .pixel]
+  static let brushes: [Tool] = [.pencil, .pen, .calligraphy, .oil, .crayon, .marker, .watercolor, .airbrush, .highlighter, .pixel]
 
   weak var canvas: CanvasView?
   private var targets: [ClosureTarget] = []
@@ -157,7 +244,7 @@ final class Controls {
     guard let canvas else { return [] }
     if !elements.isEmpty { return Set(elements.map(\.kind)) }
     switch canvas.tool {
-    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush: return [.freehand]
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush, .crayon, .marker, .watercolor, .oil: return [.freehand]
     case .line: return [.line]
     case .arrow: return [.arrow]
     case .rectangle: return [.rectangle]
@@ -174,6 +261,36 @@ final class Controls {
   var style: Style {
     guard let canvas else { return Style() }
     return elements.first.map(Style.init) ?? canvas.style
+  }
+
+  /// The style of the first selected object that has the property being shown, so a mixed
+  /// selection shows a line's dash, not a text box's lack of one.
+  func style(for kinds: Set<Element.Kind>) -> Style {
+    guard let canvas else { return Style() }
+    return (elements.first { kinds.contains($0.kind) } ?? elements.first).map(Style.init) ?? canvas.style
+  }
+
+  static let stroked: Set<Element.Kind> = [.rectangle, .ellipse, .polygon, .line, .arrow, .freehand, .text]
+  static let filled: Set<Element.Kind> = [.rectangle, .ellipse, .polygon, .text]
+  static let widened: Set<Element.Kind> = [.rectangle, .ellipse, .polygon, .line, .arrow, .freehand]
+  static let dashed: Set<Element.Kind> = [.rectangle, .ellipse, .polygon, .line, .arrow]
+  static let lined: Set<Element.Kind> = [.line, .arrow]
+  static let texts: Set<Element.Kind> = [.text]
+
+  // Colours, for the bar and the Palette alike.
+
+  var strokeColor: Color? { style(for: Self.stroked).stroke }
+  var fillColor2: Color? { style(for: Self.filled).fill }
+
+  func setStroke(_ color: Color?, live: Bool) { canvas?.setStyle("Change Color", coalescing: live) { $0.stroke = color } }
+  func setFill(_ color: Color?, live: Bool) { canvas?.setStyle("Change Fill", coalescing: live) { $0.fill = color } }
+
+  var background: Color? { canvas?.scene.paper.background }
+
+  func setBackground(_ color: Color?, live: Bool) {
+    guard let canvas else { return }
+    let name = color == nil ? "Clear Background" : "Background"
+    if live { canvas.drawing.coalesce(name) { $0.paper.background = color } } else { canvas.drawing.edit(name) { $0.paper.background = color } }
   }
 
   /// What changes and what's shown: the tool, the kinds of object, and how many there are.
@@ -205,6 +322,10 @@ final class Controls {
     case .pixel: [1, 2, 4]
     case .calligraphy: [6, 10, 18]
     case .airbrush: [16, 28, 48]
+    case .crayon: [4, 8, 16]
+    case .marker: [6, 10, 18]
+    case .watercolor: [10, 20, 36]
+    case .oil: [8, 16, 28]
     case .eraser, .strokeEraser: [10, 24, 48]
     default: [2, 4, 8]
     }
@@ -215,7 +336,7 @@ final class Controls {
   var widthIndex: Int? {
     guard let canvas else { return nil }
     let tool = widthTool
-    let width = tool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style.strokeWidth
+    let width = tool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style(for: Self.widened).strokeWidth
     return Self.widths(for: tool).firstIndex { abs($0 - width) < 0.01 }
   }
 
@@ -228,7 +349,7 @@ final class Controls {
   /// The width now, of the eraser or of what's styled.
   var width: CGFloat {
     guard let canvas else { return 3 }
-    return widthTool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style.strokeWidth
+    return widthTool == .eraser ? (canvas.styles[.eraser]?.strokeWidth ?? 16) : style(for: Self.widened).strokeWidth
   }
 
   /// The widths the slider offers for the tool.
@@ -312,10 +433,14 @@ final class Controls {
 
   // MARK: Controls
 
+  /// Gives a colour to something. `live` is true while a colour is being dragged out, so the
+  /// changes make one undo step.
+  typealias ColorApply = @MainActor (_ color: Color?, _ live: Bool) -> Void
+
   /// A row of swatches, a none swatch first when allowed, and a wheel for any other color.
   func colorRow(
     _ colors: [Color], allowsNone: Bool, side: CGFloat = 19, value: @escaping @MainActor () -> Color??,
-    apply: @escaping @MainActor (Color?) -> Void
+    apply: @escaping ColorApply
   ) -> NSStackView {
     let choices: [Color?] = (allowsNone ? [nil] : []) + colors.prefix(allowsNone ? 6 : 7).map { $0 }
     let row = NSStackView()
@@ -325,10 +450,10 @@ final class Controls {
   }
 
   /// Every color in two rows, as the bar's color popover shows them.
-  func colorGrid(allowsNone: Bool, value: @escaping @MainActor () -> Color??, apply: @escaping @MainActor (Color?) -> Void) -> NSView {
+  func colorGrid(allowsNone: Bool, value: @escaping @MainActor () -> Color??, apply: @escaping ColorApply) -> NSView {
     let top: [Color?] = Self.strokes.map { $0 } + (allowsNone ? [nil] : [])
     let bottom: [Color?] = Self.fills.map { $0 }
-    let all = swatches(top + bottom, side: 22, value: value, apply: apply, wheel: true)
+    let all = swatches(top + bottom, side: 22, value: value, apply: apply, wheel: false)
     var rows = [Array(all.prefix(top.count)), Array(all.dropFirst(top.count))]
     let columns = max(rows[0].count, rows[1].count)
     for i in rows.indices where rows[i].count < columns { rows[i] += Array(repeating: NSGridCell.emptyContentView, count: columns - rows[i].count) }
@@ -340,23 +465,23 @@ final class Controls {
 
   private func swatches(
     _ choices: [Color?], side: CGFloat, value: @escaping @MainActor () -> Color??,
-    apply: @escaping @MainActor (Color?) -> Void, wheel: Bool = true
+    apply: @escaping ColorApply, wheel: Bool = true
   ) -> [NSView] {
     var swatches: [SwatchButton] = []
     for color in choices {
       let swatch = SwatchButton(.color(color), side: side)
       swatch.display = display
-      wire(swatch) { _ in apply(color) }
+      wire(swatch) { _ in apply(color, false) }
       swatch.toolTip = color.map { $0.name.prefix(1).uppercased() + $0.name.dropFirst() } ?? "None"
       swatch.setAccessibilityLabel(swatch.toolTip)
       swatches.append(swatch)
     }
-    // Any other color, from the system color panel; the swatch shows it once chosen.
+    // Any other colour, from a spectrum in a popover beside it; the swatch shows it once chosen.
     let custom = SwatchButton(.wheel, side: side)
     custom.display = display
-    wire(custom) { _ in
-      let current = value() ?? nil
-      ColorPanelRelay.open(current) { apply($0) }
+    wire(custom) { [weak self, weak custom] _ in
+      guard let self, let custom else { return }
+      self.showPicker(from: custom, value: value, apply: apply)
     }
     custom.toolTip = "Other Colors…"
     custom.setAccessibilityLabel("Other colors")
@@ -370,7 +495,62 @@ final class Controls {
       custom.kind = matched || current == nil ? .wheel : .color(current)
       custom.isChosen = !matched && current != nil
     }
-    return swatches + [custom]
+    return wheel ? swatches + [custom] : swatches
+  }
+
+  /// The spectrum popover a wheel swatch opens, and the controls in it.
+  private var picker: (popover: NSPopover, controls: Controls)?
+
+  private func showPicker(from view: NSView, value: @escaping @MainActor () -> Color??, apply: @escaping ColorApply) {
+    picker?.popover.close()
+    let controls = Controls()
+    controls.canvas = canvas
+    let content = controls.colorPicker(value: value) { [weak self] color, live in
+      apply(color, live)
+      self?.refresh()
+      self?.picker?.controls.refresh()
+    }
+    controls.refresh()
+    let popover = popoverAbove(content, from: view, edge: .minY)
+    picker = (popover, controls)
+  }
+
+  /// The spectrum and a hex field, for any colour, in the window.
+  func colorPicker(value: @escaping @MainActor () -> Color??, apply: @escaping ColorApply) -> NSView {
+    let spectrum = SpectrumView()
+    spectrum.setAccessibilityLabel("Color spectrum")
+    // A drag in the spectrum, let go and all, is one change to undo.
+    spectrum.pick = { [weak self] color, done in
+      apply(color, true)
+      if done { self?.canvas?.drawing.finishCoalescing() }
+    }
+    let hex = NSTextField(string: "")
+    hex.placeholderString = "#RRGGBB"
+    hex.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+    hex.controlSize = .small
+    hex.setAccessibilityLabel("Hex color")
+    // Only Return applies it: leaving the field, as closing the popover does, changes nothing.
+    hex.cell?.sendsActionOnEndEditing = false
+    hex.widthAnchor.constraint(equalToConstant: 84).isActive = true
+    wire(hex) { [weak hex] _ in
+      guard let text = hex?.stringValue, let color = Color(hex: text) else { return NSSound.beep() }
+      apply(color, false)
+    }
+    let label = NSTextField(labelWithString: "Hex")
+    label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+    label.textColor = .secondaryLabelColor
+    let row = NSStackView(views: [label, hex])
+    row.spacing = 6
+    refreshers.append { [weak spectrum, weak hex] in
+      let current = value() ?? nil
+      spectrum?.color = current
+      if let hex, hex.currentEditor() == nil { hex.stringValue = current?.hex ?? "" }
+    }
+    let column = NSStackView(views: [spectrum, row])
+    column.orientation = .vertical
+    column.alignment = .leading
+    column.spacing = 8
+    return column
   }
 
   /// A slider for the opacity, with the percentage beside it.
@@ -445,17 +625,17 @@ final class Controls {
     if hasShapes || hasLines {
       rows.append(("Style", segmented(
         images: Element.Dash.allCases.map { (Self.dashImage($0), $0.rawValue.capitalized) },
-        selected: { [weak self] in self.flatMap { Element.Dash.allCases.firstIndex(of: $0.style.dash) } }
+        selected: { [weak self] in self.flatMap { Element.Dash.allCases.firstIndex(of: $0.style(for: Controls.dashed).dash) } }
       ) { [weak canvas] i in canvas?.setStyle("Change Line") { $0.dash = Element.Dash.allCases[i] } }))
     }
     if kinds == [.rectangle] {
       rows.append(("Corners", segmented(images: [(Self.cornerImage(false), "Sharp"), (Self.cornerImage(true), "Round")], selected: {
-        [weak self] in (self?.style.cornerRadius ?? 0) > 0 ? 1 : 0
+        [weak self] in (self?.style(for: [.rectangle]).cornerRadius ?? 0) > 0 ? 1 : 0
       }) { [weak canvas] i in canvas?.setStyle(i == 0 ? "Sharp Corners" : "Round Corners") { $0.cornerRadius = i == 0 ? 0 : 16 } }))
     }
     if hasLines || kinds == [.polygon] {
       rows.append(("Line", segmented(images: [(Self.curveImage(false), "Straight"), (Self.curveImage(true), "Curved")], selected: {
-        [weak self] in self?.style.curved == true ? 1 : 0
+        [weak self] in self?.style(for: [.line, .arrow, .polygon]).curved == true ? 1 : 0
       }) { [weak canvas] i in canvas?.setStyle(i == 0 ? "Straighten" : "Curve") { $0.curved = i == 1 } }))
     }
     return rows

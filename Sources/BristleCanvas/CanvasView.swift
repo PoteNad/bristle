@@ -30,6 +30,8 @@ public struct CanvasConfiguration: Equatable, Sendable {
   public var gridSpacing: CGFloat = 20
   /// Go back to the Select tool after adding a shape, line, or text.
   public var returnsToSelect = false
+  /// Rulers along the top and left, in points from the frame's corner, as MS Paint shows them.
+  public var showsRulers = false
 
   public init() {}
 }
@@ -44,7 +46,27 @@ public final class CanvasView: NSView {
   public let scrollView: NSScrollView
   public weak var delegate: CanvasViewDelegate?
   public var configuration = CanvasConfiguration() {
-    didSet { if configuration != oldValue { needsDisplay = true } }
+    didSet {
+      guard configuration != oldValue else { return }
+      needsDisplay = true
+      if configuration.showsRulers != oldValue.showsRulers { updateRulers() }
+    }
+  }
+
+  /// AppKit's own rulers, measuring from the frame's corner, or the canvas's origin.
+  func updateRulers() {
+    scrollView.hasHorizontalRuler = configuration.showsRulers
+    scrollView.hasVerticalRuler = configuration.showsRulers
+    scrollView.rulersVisible = configuration.showsRulers
+    guard configuration.showsRulers else { return }
+    for ruler in [scrollView.horizontalRulerView, scrollView.verticalRulerView] {
+      if ruler?.measurementUnits != .points { ruler?.measurementUnits = .points }
+    }
+    let origin = scene.frame?.origin ?? .zero
+    scrollView.horizontalRulerView?.originOffset = origin.x - bounds.minX
+    scrollView.verticalRulerView?.originOffset = origin.y - bounds.minY
+    scrollView.horizontalRulerView?.needsDisplay = true
+    scrollView.verticalRulerView?.needsDisplay = true
   }
 
   /// The tool in use. The eyedropper returns to the tool before it after picking a colour.
@@ -88,6 +110,9 @@ public final class CanvasView: NSView {
 
   public let images = ImageStore()
   private var pathCache: [String: (Element, CGPath)] = [:]
+  /// The pieces each selected object's dotted outline goes around, kept until it changes or
+  /// the zoom does.
+  var haloCache: [String: (element: Element, scale: CGFloat, pieces: [CGPath])] = [:]
   var interaction = Interaction.none
   /// The group whose members are picked one at a time, after double-clicking into it.
   var enteredGroup: String?
@@ -131,7 +156,7 @@ public final class CanvasView: NSView {
 
   public init(drawing: Drawing) {
     self.drawing = drawing
-    let scroll = NSScrollView()
+    let scroll = CanvasScrollView()
     scrollView = scroll
     super.init(frame: NSRect(x: 0, y: 0, width: 1000, height: 800))
     scroll.documentView = self
@@ -205,6 +230,7 @@ public final class CanvasView: NSView {
     setFrameSize(rect.size)
     setBoundsOrigin(rect.origin)
     if keepingVisible { scroll(visible.origin) }
+    if configuration.showsRulers { updateRulers() }
     // AppKit leaves a subview's layer where it was when the bounds origin moves, so the text
     // being typed is put back over its element.
     if let editor = textEditor {
@@ -260,18 +286,20 @@ public final class CanvasView: NSView {
       pathCache.removeAll()
       if change == nil { images.removeAll() }
       updateCanvasSize()
+      if configuration.showsRulers { updateRulers() }
       needsDisplay = true
       NSAccessibility.post(element: self, notification: .layoutChanged)
       return
     }
     for element in change.touchedElements { invalidate(element) }
     if !drawing.isInGesture { updateCanvasSize() }
-    if let editor = textEditor, let element = scene[editor.elementID] { editor.follow(element) }
+    if let editor = textEditor, let element = scene[editor.elementID] { editor.refresh(element) }
     invalidateAccessibility()
   }
 
   @objc private func selectionDidChange() {
     needsDisplay = true
+    haloCache = haloCache.filter { drawing.selection.contains($0.key) }
     if let croppingID, !drawing.selection.contains(croppingID) { self.croppingID = nil }
     if let pointEditingID, !drawing.selection.contains(pointEditingID) { self.pointEditingID = nil }
     invalidateAccessibility()
@@ -298,19 +326,29 @@ public final class CanvasView: NSView {
 
   // MARK: Drawing
 
-  /// The canvas behind the drawing: its own color, or else one that follows the appearance, near
-  /// white in light and near black in dark, as Freeform's board does.
+  /// The canvas behind the drawing, as shown: its own color, turned around for dark mode as the
+  /// drawing is, or else one that follows the appearance, near white in light and near black in
+  /// dark, as Freeform's board does.
   var canvasColor: CGColor {
-    if let background = scene.paper.background, scene.frame == nil { return background.cgColor }
-    return appearanceIsDark ? CGColor(srgbRed: 0.118, green: 0.118, blue: 0.122, alpha: 1) : .white
+    if let background = scene.paper.background, scene.frame == nil { return shown(background).cgColor }
+    return automaticCanvasColor
+  }
+
+  var automaticCanvasColor: CGColor {
+    appearanceIsDark ? CGColor(srgbRed: 0.118, green: 0.118, blue: 0.122, alpha: 1) : .white
+  }
+
+  /// Around a frame, the canvas is a shade darker, so the frame reads as the page, as MS Paint's
+  /// page sits on grey.
+  var outsideFrameColor: CGColor {
+    appearanceIsDark ? CGColor(srgbRed: 0.082, green: 0.082, blue: 0.086, alpha: 1) : CGColor(srgbRed: 0.945, green: 0.945, blue: 0.953, alpha: 1)
   }
 
   private var appearanceIsDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
 
-  /// Whether the drawing is shown for a dark canvas, with its lightness turned around.
-  var isDarkCanvas: Bool {
-    scene.paper.background == nil && appearanceIsDark
-  }
+  /// Whether the drawing is shown for a dark canvas, with its lightness turned around, as
+  /// Excalidraw shows it: every colour, the background too, so what the Palette shows matches.
+  var isDarkCanvas: Bool { appearanceIsDark }
 
   public override func viewDidChangeEffectiveAppearance() {
     super.viewDidChangeEffectiveAppearance()
@@ -320,12 +358,15 @@ public final class CanvasView: NSView {
   public override func draw(_ dirtyRect: NSRect) {
     guard let context = NSGraphicsContext.current?.cgContext else { return }
     let scale = magnification
-    context.setFillColor(canvasColor)
-    context.fill(dirtyRect)
-    // A background colors only the frame, the part that's exported, when there is one.
-    if let background = scene.paper.background, let frame = scene.frame {
-      context.setFillColor(background.cgColor)
+    if let frame = scene.frame {
+      // The frame is the page: its background, or the canvas colour, on a darker surround.
+      context.setFillColor(outsideFrameColor)
+      context.fill(dirtyRect)
+      context.setFillColor(scene.paper.background.map { shown($0).cgColor } ?? automaticCanvasColor)
       context.fill(frame.intersection(dirtyRect))
+    } else {
+      context.setFillColor(canvasColor)
+      context.fill(dirtyRect)
     }
     drawGrid(in: context, dirty: dirtyRect, scale: scale)
     // Zoomed in far, images show their own square pixels, as paint programs show them.
@@ -389,9 +430,8 @@ public final class CanvasView: NSView {
       context.saveGState()
       if element.opacity < 1 { context.setAlpha(element.opacity) }
       if element.rotation != 0 { context.concatenate(element.transform) }
-      context.setFillColor(shown(element.stroke ?? .ink).cgColor)
-      context.addPath(path)
-      context.fillPath(using: .winding)
+      // Drawn by the renderer, texture and all, from the kept outline.
+      Renderer.drawInk(shown(element), path: path, in: context)
       context.restoreGState()
       return
     }
@@ -406,15 +446,19 @@ public final class CanvasView: NSView {
     while spacing * scale < 14 { spacing *= 2 }
     let dot = max(1 / scale, 0.25)
     context.setFillColor(isDarkCanvas ? CGColor(gray: 1, alpha: 0.2) : CGColor(gray: 0, alpha: 0.2))
+    // All the dots are one path, filled at once, which is far quicker than one at a time.
+    let dots = CGMutablePath()
     var y = (dirty.minY / spacing).rounded(.up) * spacing
     while y <= dirty.maxY {
       var x = (dirty.minX / spacing).rounded(.up) * spacing
       while x <= dirty.maxX {
-        context.fillEllipse(in: CGRect(x: x - dot, y: y - dot, width: dot * 2, height: dot * 2))
+        dots.addRect(CGRect(x: x - dot, y: y - dot, width: dot * 2, height: dot * 2))
         x += spacing
       }
       y += spacing
     }
+    context.addPath(dots)
+    context.fillPath()
   }
 
   /// Zoomed in far enough to see single pixels, a line between each, as in a paint program.
@@ -586,15 +630,6 @@ public final class CanvasView: NSView {
     delegate?.canvasViewZoomDidChange(self)
   }
 
-  public override func scrollWheel(with event: NSEvent) {
-    // Command-scroll zooms around the pointer, as in Preview.
-    if event.modifierFlags.contains(.command), event.phase != .ended || event.scrollingDeltaY != 0 {
-      let factor = 1 + event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.01 : 0.1)
-      zoom(to: magnification * factor, around: convert(event.locationInWindow, from: nil))
-      return
-    }
-    super.scrollWheel(with: event)
-  }
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
@@ -608,4 +643,20 @@ public final class CanvasView: NSView {
 
 extension CGColor {
   var nsColor: NSColor { NSColor(cgColor: self) ?? .black }
+}
+
+/// The canvas's scroll view. Command-scrolling zooms around the pointer, as in Preview. It's
+/// handled here rather than by the canvas, since a document view that handles the scroll wheel
+/// itself loses AppKit's responsive scrolling, which pans a large drawing smoothly.
+final class CanvasScrollView: NSScrollView {
+  override func scrollWheel(with event: NSEvent) {
+    if event.modifierFlags.contains(.command), let canvas = documentView as? CanvasView,
+      event.phase != .ended || event.scrollingDeltaY != 0
+    {
+      let factor = 1 + event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 0.01 : 0.1)
+      canvas.zoom(to: canvas.magnification * factor, around: canvas.convert(event.locationInWindow, from: nil))
+      return
+    }
+    super.scrollWheel(with: event)
+  }
 }

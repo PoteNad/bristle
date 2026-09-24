@@ -65,7 +65,9 @@ public struct Style: Equatable, Sendable {
       e.dash = dash
       e.startArrowhead = startArrowhead
       e.endArrowhead = endArrowhead
+      let wasCurved = e.curved
       e.curved = curved
+      if curved && !wasCurved { e.bendIfStraight() }
     case .rectangle, .ellipse, .polygon:
       e.strokeWidth = strokeWidth
       e.dash = dash

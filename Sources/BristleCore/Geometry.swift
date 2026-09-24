@@ -74,6 +74,12 @@ public enum Geometry {
   /// A smooth curve through the points (a Catmull–Rom spline drawn with cubic Béziers).
   public static func smoothPath(through points: [CGPoint], closed: Bool) -> CGMutablePath {
     let path = CGMutablePath()
+    // A point placed twice, as a click that adds a corner can, would kink the curve.
+    var points = points.reduce(into: [CGPoint]()) { kept, p in
+      if let last = kept.last, last.distance(to: p) < 0.01 { return }
+      kept.append(p)
+    }
+    if closed, points.count > 1, let first = points.first, let last = points.last, first.distance(to: last) < 0.01 { points.removeLast() }
     guard points.count > 2 else {
       path.addLines(between: points)
       if closed { path.closeSubpath() }
@@ -98,6 +104,28 @@ public enum Geometry {
 }
 
 extension Element {
+  /// The middle of the curve or line from point `i` to the next, for the handle that bends it.
+  public func segmentMiddle(_ i: Int) -> CGPoint {
+    let p = worldPoints
+    guard p.indices.contains(i), p.indices.contains(i + 1) else { return p.first ?? .zero }
+    guard curved, p.count > 2 else { return CGPoint(x: (p[i].x + p[i + 1].x) / 2, y: (p[i].y + p[i + 1].y) / 2) }
+    // A Catmull-Rom curve's middle, as the path draws it.
+    let p0 = p[max(0, i - 1)], p1 = p[i], p2 = p[i + 1], p3 = p[min(p.count - 1, i + 2)]
+    return CGPoint(x: (-p0.x + 9 * p1.x + 9 * p2.x - p3.x) / 16, y: (-p0.y + 9 * p1.y + 9 * p2.y - p3.y) / 16)
+  }
+
+  /// Gives a straight two-point line a gentle bend, so making it curved shows at once, as a
+  /// curve in MS Paint or Excalidraw starts from a bent line.
+  public mutating func bendIfStraight() {
+    guard isLinear, curved, points.count == 2 else { return }
+    let p = worldPoints
+    let dx = p[1].x - p[0].x, dy = p[1].y - p[0].y
+    let length = hypot(dx, dy)
+    guard length > 1 else { return }
+    let mid = CGPoint(x: (p[0].x + p[1].x) / 2 + dy / length * length * 0.18, y: (p[0].y + p[1].y) / 2 - dx / length * length * 0.18)
+    setWorldPoints([p[0], mid, p[1]])
+  }
+
   /// The element's shape in unrotated canvas coordinates: the outline to fill and stroke for
   /// shapes, the line for lines and arrows, and the filled ink for freehand strokes.
   public var path: CGPath {

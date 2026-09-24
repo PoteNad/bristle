@@ -44,7 +44,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     toolbar.delegate = self
     toolbar.displayMode = .iconOnly
     toolbar.allowsUserCustomization = false
-    toolbar.centeredItemIdentifiers = [Self.drawItems, Self.shapeItems]
+    toolbar.centeredItemIdentifiers = Set(Self.groups.map(\.id))
     if #available(macOS 15.0, *) { toolbar.allowsDisplayModeCustomization = false }
     window.toolbar = toolbar
     window.toolbarStyle = .unified
@@ -70,7 +70,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     // Over the bars and the toolbar, the pointer is the arrow, not the tool's.
     canvas.coveredRects = { [weak self] in
       guard let self, let window = self.window else { return [] }
-      var rects = [self.zoomBar.bar, self.canvasBar.bar, self.styleBar.bar].filter { !$0.isHidden && $0.window != nil }
+      var rects = [self.zoomBar.bar, self.canvasBar.bar, self.styleBar.bar].filter { !$0.isHidden && $0.alphaValue > 0.1 && $0.window != nil }
         .map { $0.convert($0.bounds, to: nil) }
       let top = window.contentLayoutRect.maxY
       rects.append(NSRect(x: 0, y: top, width: window.frame.width, height: max(0, window.frame.height - top)))
@@ -80,6 +80,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       guard let self else { return }
       self.window?.invalidateCursorRects(for: self.canvas)
     }
+    root.autoHides = UserDefaults.standard.bool(forKey: PreferenceKey.barsAutoHide) && !isAutomatedCheck
     let controller = NSViewController()
     controller.view = root
     // The Palette shares the window beside the canvas, like Plainst's symbols sidebar.
@@ -213,6 +214,14 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   @objc private func defaultsDidChange() {
     canvas.configuration = AppPreferences.canvasConfiguration
     canvasBar.update()
+    palette.update()
+    updateStyleBarPlace()
+    root.autoHides = UserDefaults.standard.bool(forKey: PreferenceKey.barsAutoHide) && !isAutomatedCheck
+  }
+
+  /// The style bar steps aside while the Palette is open, if that's the setting.
+  private func updateStyleBarPlace() {
+    styleBar.suppressed = paletteVisible && UserDefaults.standard.bool(forKey: PreferenceKey.barHidesWithPalette)
   }
 
   private var paletteScheduled = false
@@ -232,6 +241,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   }
 
   private func updateBars() {
+    updateStyleBarPlace()
     palette.update()
     styleBar.update()
     zoomBar.update()
@@ -241,29 +251,33 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   // MARK: Toolbar
 
-  static let drawItems = NSToolbarItem.Identifier("draw")
-  static let shapeItems = NSToolbarItem.Identifier("shapes")
+  /// The tools in capsules, as MS Paint's ribbon groups them: selecting; the tools that paint;
+  /// shapes and lines; and what's put on the canvas, text and pictures.
+  static let groups: [(id: NSToolbarItem.Identifier, label: String, slots: [Slot])] = [
+    (NSToolbarItem.Identifier("select"), "Select", [.select]),
+    (NSToolbarItem.Identifier("paint"), "Paint", [.draw, .eraser, .fill, .eyedropper]),
+    (NSToolbarItem.Identifier("shapes"), "Shapes", [.rectangle, .ellipse, .polygon, .line, .arrow]),
+    (NSToolbarItem.Identifier("insert"), "Insert", [.text, .image]),
+  ]
+
+  static func slots(in id: NSToolbarItem.Identifier) -> [Slot] { groups.first { $0.id == id }?.slots ?? [] }
   static let shareToolbarItem = NSToolbarItem.Identifier("share")
   static let paletteToolbarItem = NSToolbarItem.Identifier("palette")
 
-  /// The tools in the toolbar, in two capsules: drawing, then shapes, text, and images.
+  /// The tools in the toolbar.
   enum Slot: Int, CaseIterable {
-    case select, draw, eraser, fill, rectangle, ellipse, polygon, line, arrow, text, image
-
-    static let drawing: [Slot] = [.select, .draw, .eraser, .fill]
-    static let shapes: [Slot] = [.rectangle, .ellipse, .polygon, .line, .arrow, .text, .image]
+    case select, draw, eraser, fill, rectangle, ellipse, polygon, line, arrow, text, image, eyedropper
   }
 
   func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
     // The tools centre over the canvas, and Share and the Palette's button stay over the
     // Palette, so opening it doesn't push the tools off centre.
     if #available(macOS 14.0, *) {
-      return [
-        .flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, .inspectorTrackingSeparator,
-        .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem,
+      return [.flexibleSpace] + Self.groups.map(\.id) + [
+        .flexibleSpace, .inspectorTrackingSeparator, .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem,
       ]
     }
-    return [.flexibleSpace, Self.drawItems, Self.shapeItems, .flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
+    return [.flexibleSpace] + Self.groups.map(\.id) + [.flexibleSpace, Self.shareToolbarItem, Self.paletteToolbarItem]
   }
 
   func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -276,9 +290,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     case .draw: (lastBrush.symbol, "Draw", "Draw (P)")
     case .eraser: ("eraser", "Eraser", "Eraser (E)")
     case .fill: ("drop", "Fill", "Fill (F)")
+    case .eyedropper: ("eyedropper", "Pick Color", "Pick Color (I)")
     case .rectangle: ("rectangle", "Rectangle", "Rectangle (R)")
     case .ellipse: ("circle", "Ellipse", "Ellipse (O)")
-    case .polygon: ("pentagon", "Polygon", "Polygon (G)")
+    case .polygon: ("pentagon", "Shapes", "Shapes and Polygon (G)")
     case .line: ("line.diagonal", "Line", "Line (L)")
     case .arrow: ("arrow.up.right", "Arrow", "Arrow (A)")
     case .text: ("textformat", "Text", "Text (T)")
@@ -336,16 +351,12 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       item.isBordered = true
       return item
     }
-    let slots: [Slot]
-    switch itemIdentifier {
-    case Self.drawItems: slots = Slot.drawing
-    case Self.shapeItems: slots = Slot.shapes
-    default: return nil
-    }
+    guard let spec = Self.groups.first(where: { $0.id == itemIdentifier }) else { return nil }
+    let slots = spec.slots
     let group = NSToolbarItemGroup(
       itemIdentifier: itemIdentifier, images: slots.map { slotImage($0, on: false)! }, selectionMode: .momentary,
       labels: slots.map { slotDetails($0).label }, target: self, action: #selector(chooseSlot(_:)))
-    group.label = itemIdentifier == Self.drawItems ? "Draw" : "Shapes"
+    group.label = spec.label
     group.paletteLabel = group.label
     // Each tool acts on its own: on macOS 26 the toolbar draws the group, so there's no
     // segmented control to ask which segment was clicked.
@@ -366,7 +377,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   var currentSlot: Slot? {
     switch canvas.tool {
     case .select: .select
-    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush: .draw
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush, .crayon, .marker, .watercolor, .oil: .draw
     case .eraser, .strokeEraser: .eraser
     case .fill: .fill
     case .rectangle: .rectangle
@@ -375,7 +386,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     case .line: .line
     case .arrow: .arrow
     case .text: .text
-    case .eyedropper: nil
+    case .eyedropper: .eyedropper
     }
   }
 
@@ -383,7 +394,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   private func updateToolGroups() {
     let current = currentSlot
     for group in toolGroups {
-      let slots = group.itemIdentifier == Self.drawItems ? Slot.drawing : Slot.shapes
+      let slots = Self.slots(in: group.itemIdentifier)
       for (i, (item, slot)) in zip(group.subitems, slots).enumerated() {
         let image = slotImage(slot, on: slot == current)
         item.image = image
@@ -393,7 +404,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   }
 
   @objc private func chooseSlot(_ sender: NSToolbarItemGroup) {
-    let slots = sender.itemIdentifier == Self.drawItems ? Slot.drawing : Slot.shapes
+    let slots = Self.slots(in: sender.itemIdentifier)
     let index = (sender.view as? NSSegmentedControl)?.selectedSegment ?? -1
     guard slots.indices.contains(index) else { return }
     choose(slots[index], from: sender)
@@ -417,6 +428,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     case .arrow: canvas.tool = .arrow
     case .text: canvas.tool = .text
     case .image: insertImage(sender)
+    case .eyedropper: canvas.tool = .eyedropper
     }
     updateBars()
     window?.makeFirstResponder(canvas)
@@ -444,16 +456,17 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   // MARK: Commands
 
   @objc func toggleGrid(_ sender: Any?) { flip(PreferenceKey.showsGrid) }
+  @objc func toggleRulers(_ sender: Any?) { flip(PreferenceKey.showsRulers) }
   @objc func toggleSnapToGrid(_ sender: Any?) { flip(PreferenceKey.snapsToGrid) }
   @objc func toggleGuides(_ sender: Any?) { flip(PreferenceKey.snapsToGuides) }
 
-  private func flip(_ key: String) {
+  func flip(_ key: String) {
     guard !isAutomatedCheck else { return }
     UserDefaults.standard.set(!UserDefaults.standard.bool(forKey: key), forKey: key)
     NotificationCenter.default.post(name: .canvasDefaultsDidChange, object: nil)
   }
 
-  var paletteVisible: Bool { !paletteItem.isCollapsed }
+  var paletteVisible: Bool { paletteItem.map { !$0.isCollapsed } ?? false }
 
   /// The Palette's width until it's dragged wider or narrower.
   static let paletteWidth: CGFloat = 280
@@ -481,6 +494,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     // Checks look at the layout right away, so they skip the slide.
     guard !isAutomatedCheck else {
       paletteItem.isCollapsed = !show
+      updateStyleBarPlace()
       return
     }
     NSAnimationContext.runAnimationGroup { context in
@@ -489,6 +503,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       paletteItem.animator().isCollapsed = !show
     }
     if !isAutomatedCheck { UserDefaults.standard.set(show, forKey: PreferenceKey.paletteVisible) }
+    updateStyleBarPlace()
   }
 
   @objc func showFonts(_ sender: Any?) {
@@ -600,6 +615,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
       menuItem.title = paletteVisible ? "Hide Palette" : "Show Palette"
     case #selector(toggleGrid(_:)):
       menuItem.state = defaults.bool(forKey: PreferenceKey.showsGrid) ? .on : .off
+    case #selector(toggleRulers(_:)):
+      menuItem.title = defaults.bool(forKey: PreferenceKey.showsRulers) ? "Hide Rulers" : "Show Rulers"
     case #selector(toggleSnapToGrid(_:)):
       menuItem.state = defaults.bool(forKey: PreferenceKey.snapsToGrid) ? .on : .off
     case #selector(toggleGuides(_:)):
@@ -630,6 +647,46 @@ final class EditorView: NSView {
   var options: NSView? { didSet { replace(oldValue, options) } }
   var style: NSView? { didSet { replace(oldValue, style) } }
   var didLayout: (() -> Void)?
+  /// Whether the bars show only when the pointer comes near the bottom of the window.
+  var autoHides = false {
+    didSet {
+      guard autoHides != oldValue else { return }
+      updateTrackingAreas()
+      setBarsShown(!autoHides, animated: false)
+    }
+  }
+  private var barsShown = true
+
+  private var bars: [NSView] { [zoom, options, style].compactMap { $0 } }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    trackingAreas.forEach(removeTrackingArea)
+    guard autoHides else { return }
+    addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+  }
+
+  override func mouseMoved(with event: NSEvent) {
+    super.mouseMoved(with: event)
+    guard autoHides else { return }
+    let p = convert(event.locationInWindow, from: nil)
+    // Near the bottom edge, where the bars are, they come up.
+    setBarsShown(p.y < Self.margin * 2 + Bar.height * 2 + 20, animated: true)
+  }
+
+  override func mouseExited(with event: NSEvent) {
+    if autoHides { setBarsShown(false, animated: true) }
+  }
+
+  private func setBarsShown(_ shown: Bool, animated: Bool) {
+    guard shown != barsShown || !animated else { return }
+    barsShown = shown
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = animated ? 0.18 : 0
+      for bar in bars { (animated ? bar.animator() : bar).alphaValue = shown ? 1 : 0 }
+    }
+    didLayout?()
+  }
 
   private func replace(_ old: NSView?, _ new: NSView?, below: Bool = false) {
     old?.removeFromSuperview()

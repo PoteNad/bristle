@@ -29,7 +29,7 @@ public enum Freehand {
         return size / 2 * (0.15 + 0.85 * abs(sin(angle - .pi / 4)))
       }
     }
-    guard brush == .pen else { return Array(repeating: size / 2, count: points.count) }
+    guard brush.usesPressure else { return Array(repeating: size / 2, count: points.count) }
     let pressures = pressures.count == points.count ? pressures : simulatedPressures(points, size: size)
     var result = pressures.map { size / 2 * (0.3 + 0.7 * $0) }
     // Taper the first and last few points.

@@ -84,6 +84,17 @@ public struct Element: Equatable, Sendable, Identifiable {
     case calligraphy
     /// A soft spray of dots, as MS Paint's airbrush sprays.
     case airbrush
+    /// Waxy colour with the paper's grain showing through.
+    case crayon
+    /// Flat, slightly see-through colour with round ends.
+    case marker
+    /// Thin, soft colour whose edges gather darker, as watercolour dries.
+    case watercolor
+    /// Thick paint with the streaks of the brush's bristles.
+    case oil
+
+    /// Whether the stroke's thickness follows pressure, or the pointer's speed.
+    public var usesPressure: Bool { self == .pen || self == .watercolor }
   }
 
   public enum Arrowhead: String, CaseIterable, Sendable { case none, arrow, triangle, circle, bar }

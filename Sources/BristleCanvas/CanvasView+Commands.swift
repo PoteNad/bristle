@@ -153,7 +153,19 @@ extension CanvasView: NSMenuItemValidation {
       cursor(for: handle).set()
       return
     }
+    if tool == .select, let frame = scene.frame, element(at: p) == nil, let edge = frameEdge(at: p, frame) {
+      frameCursor(edge).set()
+      return
+    }
     toolCursor.set()
+  }
+
+  func frameCursor(_ edge: Int) -> NSCursor {
+    if #available(macOS 15.0, *) {
+      let positions: [NSCursor.FrameResizePosition] = [.topLeft, .top, .topRight, .right, .bottomRight, .bottom, .bottomLeft, .left]
+      return NSCursor.frameResize(position: positions[edge], directions: .all)
+    }
+    return edge % 4 == 1 ? .resizeUpDown : edge % 4 == 3 ? .resizeLeftRight : .crosshair
   }
 
   func cursor(for handle: Handle) -> NSCursor {
@@ -174,7 +186,7 @@ extension CanvasView: NSMenuItemValidation {
     case .text: return .iBeam
     // The size of a brush or the eraser shows as a ring drawn on the canvas, under the bars, so
     // the cursor itself is small.
-    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush: return Self.dotCursor
+    case .pencil, .pen, .highlighter, .pixel, .calligraphy, .airbrush, .crayon, .marker, .watercolor, .oil: return Self.dotCursor
     case .eraser, .strokeEraser: return symbolCursor("eraser", hotSpot: CGPoint(x: 9, y: 9))
     case .eyedropper: return symbolCursor("eyedropper", hotSpot: CGPoint(x: 1, y: 15))
     case .fill: return symbolCursor("drop", hotSpot: CGPoint(x: 8, y: 15))

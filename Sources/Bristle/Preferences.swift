@@ -6,10 +6,15 @@ enum PreferenceKey {
   static let appearance = "appearance"
   static let snapsToGuides = "snapsToGuides"
   static let showsGrid = "showsGrid"
+  static let showsRulers = "showsRulers"
   static let snapsToGrid = "snapsToGrid"
   static let gridSpacing = "gridSpacing"
   static let returnsToSelect = "returnsToSelect"
   static let paletteVisible = "paletteVisible"
+  /// Whether the style bar steps aside while the Palette, which has all it has, is open.
+  static let barHidesWithPalette = "barHidesWithPalette"
+  /// Whether the bars over the canvas show only when the pointer comes near them.
+  static let barsAutoHide = "barsAutoHide"
   /// Each tool's style, as JSON by tool name.
   static let toolStyles = "toolStyles"
   /// The content size of the window the user last resized, which new windows open at.
@@ -78,7 +83,7 @@ enum AppPreferences {
   }
 
   static let settingKeys = [
-    PreferenceKey.appearance, PreferenceKey.snapsToGuides, PreferenceKey.gridSpacing, PreferenceKey.returnsToSelect,
+    PreferenceKey.appearance, PreferenceKey.snapsToGuides, PreferenceKey.barHidesWithPalette, PreferenceKey.barsAutoHide, PreferenceKey.gridSpacing, PreferenceKey.returnsToSelect,
   ]
 
   static func registerDefaults() {
@@ -90,6 +95,8 @@ enum AppPreferences {
       PreferenceKey.gridSpacing: 20,
       PreferenceKey.returnsToSelect: false,
       PreferenceKey.paletteVisible: false,
+      PreferenceKey.barHidesWithPalette: true,
+      PreferenceKey.barsAutoHide: false,
     ])
   }
 
@@ -109,6 +116,7 @@ enum AppPreferences {
     var configuration = CanvasConfiguration()
     configuration.snapsToGuides = defaults.bool(forKey: PreferenceKey.snapsToGuides)
     configuration.showsGrid = defaults.bool(forKey: PreferenceKey.showsGrid)
+    configuration.showsRulers = defaults.bool(forKey: PreferenceKey.showsRulers)
     configuration.snapsToGrid = defaults.bool(forKey: PreferenceKey.snapsToGrid)
     configuration.gridSpacing = gridSpacing
     configuration.returnsToSelect = defaults.bool(forKey: PreferenceKey.returnsToSelect)
@@ -142,6 +150,8 @@ final class SettingsWindowController: NSWindowController {
   private let guides = NSButton(checkboxWithTitle: "Snap to alignment guides", target: nil, action: nil)
   private let returnsToSelect = NSButton(
     checkboxWithTitle: "Return to Select after adding a shape, line, or text", target: nil, action: nil)
+  private let barHides = NSButton(checkboxWithTitle: "Hide the style bar while the Palette is open", target: nil, action: nil)
+  private let barsAutoHide = NSButton(checkboxWithTitle: "Show the bars only when the pointer is near them", target: nil, action: nil)
 
   init() {
     let window = NSWindow(
@@ -157,7 +167,7 @@ final class SettingsWindowController: NSWindowController {
       gridSpacing.addItem(withTitle: "\(spacing) points")
       gridSpacing.lastItem?.tag = spacing
     }
-    for control in [appearanceControl, gridSpacing, guides, returnsToSelect] as [NSControl] {
+    for control in [appearanceControl, gridSpacing, guides, returnsToSelect, barHides, barsAutoHide] as [NSControl] {
       control.target = self
       control.action = #selector(changeOption)
     }
@@ -182,7 +192,7 @@ final class SettingsWindowController: NSWindowController {
       grid.column(at: 1).width = 240
       grid.rowAlignment = .firstBaseline
     }
-    let options = NSStackView(views: [guides, returnsToSelect])
+    let options = NSStackView(views: [guides, returnsToSelect, barHides, barsAutoHide])
     options.orientation = .vertical
     options.alignment = .leading
     options.spacing = 6
@@ -233,6 +243,8 @@ final class SettingsWindowController: NSWindowController {
     gridSpacing.selectItem(withTag: Int(AppPreferences.gridSpacing))
     guides.state = defaults.bool(forKey: PreferenceKey.snapsToGuides) ? .on : .off
     returnsToSelect.state = defaults.bool(forKey: PreferenceKey.returnsToSelect) ? .on : .off
+    barHides.state = defaults.bool(forKey: PreferenceKey.barHidesWithPalette) ? .on : .off
+    barsAutoHide.state = defaults.bool(forKey: PreferenceKey.barsAutoHide) ? .on : .off
   }
 
   @objc private func changeOption() {
@@ -243,6 +255,8 @@ final class SettingsWindowController: NSWindowController {
     if let spacing = gridSpacing.selectedItem?.tag, spacing > 0 { defaults.set(spacing, forKey: PreferenceKey.gridSpacing) }
     defaults.set(guides.state == .on, forKey: PreferenceKey.snapsToGuides)
     defaults.set(returnsToSelect.state == .on, forKey: PreferenceKey.returnsToSelect)
+    defaults.set(barHides.state == .on, forKey: PreferenceKey.barHidesWithPalette)
+    defaults.set(barsAutoHide.state == .on, forKey: PreferenceKey.barsAutoHide)
     AppPreferences.applyAppearance()
     NotificationCenter.default.post(name: .canvasDefaultsDidChange, object: nil)
   }

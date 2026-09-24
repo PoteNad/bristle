@@ -194,8 +194,8 @@
         }
         let toolbar = windows[0].toolbar?.items.map(\.itemIdentifier.rawValue) ?? []
         let tools = editor.toolGroups.flatMap { $0.subitems.map(\.label) }
-        guard toolbar.filter({ !$0.hasPrefix("NSToolbar") }) == ["draw", "shapes", "share", "palette"],
-          tools == ["Select", "Draw", "Eraser", "Fill", "Rectangle", "Ellipse", "Polygon", "Line", "Arrow", "Text", "Image"],
+        guard toolbar.filter({ !$0.hasPrefix("NSToolbar") }) == ["select", "paint", "shapes", "insert", "share", "palette"],
+          tools == ["Select", "Draw", "Eraser", "Fill", "Pick Color", "Rectangle", "Ellipse", "Shapes", "Line", "Arrow", "Text", "Image"],
           editor.currentSlot == .select
         else { fail("the toolbar should hold the tools and Share: \(toolbar)") }
         guard !editor.paletteVisible, !editor.zoomBar.bar.isHidden,
@@ -722,6 +722,70 @@
         canvas.select([])
         pass("shapes from the gallery, free-form selection, and Invert Selection work")
 
+        // Every textured brush draws.
+        for (i, name) in ["Crayon", "Marker", "Watercolor", "Oil Brush"].enumerated() {
+          chooseBrush(name)
+          let y = c.y - 330 + CGFloat(i) * 30
+          drag(line(from: CGPoint(x: c.x + 60, y: y), to: CGPoint(x: c.x + 200, y: y + 10), steps: 12), in: canvas)
+          guard canvas.scene.elements.last?.brush.rawValue == Tool.allCases.first(where: { $0.title == name })?.brush?.rawValue else {
+            fail("the \(name) should draw")
+          }
+        }
+        canvas.displayIfNeeded()
+
+        // A line is bent by dragging the middle of it.
+        canvas.tool = .line
+        let from = CGPoint(x: c.x - 340, y: c.y + 420), to = CGPoint(x: c.x - 200, y: c.y + 420)
+        drag(line(from: from, to: to), in: canvas, flags: .command)
+        guard let bent = canvas.scene.elements.last, bent.kind == .line, bent.points.count == 2 else { fail("the line tool should draw a line") }
+        canvas.tool = .select
+        canvas.select([bent.id])
+        let middle = bent.segmentMiddle(0)
+        drag(line(from: middle, to: CGPoint(x: middle.x, y: middle.y - 40)), in: canvas, flags: .command)
+        guard let curved = canvas.scene[bent.id], curved.points.count == 3, abs(curved.worldPoints[1].y - (middle.y - 40)) < 1 else {
+          fail("dragging a line's middle should bend it, got \(String(describing: canvas.scene[bent.id]?.worldPoints))")
+        }
+
+        // The Palette's Arrange tab places things exactly.
+        editor.togglePalette(nil)
+        editor.palette.tab = .arrange
+        editor.palette.update()
+        editor.window?.contentView?.layoutSubtreeIfNeeded()
+        guard let xField = allViews(in: editor.palette.view).compactMap({ $0 as? NSTextField }).first(where: { $0.accessibilityLabel() == "X" }) else {
+          fail("the Arrange tab should have a field for X")
+        }
+        let placed = canvas.scene.frameBounds(of: [bent.id])
+        let origin = canvas.scene.frame?.minX ?? 0
+        xField.doubleValue = Double((placed.minX - origin + 25).rounded())
+        grouped(undo) { _ = xField.sendAction(xField.action, to: xField.target) }
+        guard abs(canvas.scene.frameBounds(of: [bent.id]).minX - origin - (placed.minX - origin + 25).rounded()) < 0.5 else {
+          fail("setting X should move the line, from \(placed.minX) to \(canvas.scene.frameBounds(of: [bent.id]).minX)")
+        }
+        editor.palette.tab = .style
+        editor.togglePalette(nil)
+
+        // The spectrum picks any colour in the window, one undo step for a drag.
+        canvas.select([bent.id])
+        editor.styleBar.update()
+        press(barButton(editor.styleBar.bar, "Stroke Color"))
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        guard let colors = editor.styleBar.popover?.contentViewController?.view,
+          let spectrum = allViews(in: colors).compactMap({ $0 as? SpectrumView }).first
+        else { fail("the colour popover should show the spectrum") }
+        let strokeBefore = canvas.scene[bent.id]?.stroke
+        drag(line(from: CGPoint(x: 30, y: 30), to: CGPoint(x: 150, y: 40), steps: 6), in: spectrum)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.8))
+        guard let picked = canvas.scene[bent.id]?.stroke, picked != strokeBefore else { fail("dragging in the spectrum should colour the line") }
+        editor.styleBar.popover?.close()
+        undo.undo()
+        guard canvas.scene[bent.id]?.stroke == strokeBefore else {
+          let after1 = canvas.scene[bent.id]?.stroke
+          undo.undo()
+          fail("one undo should take back a spectrum drag: before \(String(describing: strokeBefore?.hex)), picked \(picked.hex), after one undo \(String(describing: after1?.hex)), after two \(String(describing: canvas.scene[bent.id]?.stroke?.hex)), names \(undo.undoActionName)")
+        }
+        canvas.select([])
+        pass("textured brushes draw, lines bend by their middles, the Arrange tab places things, and the spectrum picks colours")
+
         // The frame: the bar's button adds one; it's picked by its label, moved, and removed.
         canvas.tool = .select
         canvas.select([])
@@ -751,6 +815,16 @@
         guard canvas.scene.frame == nil else { fail("Delete should remove a picked frame") }
         undo.undo()
         guard canvas.scene.frame != nil else { fail("undo should bring the frame back") }
+        // Its edges drag it bigger, as MS Paint's page's do.
+        if let f = canvas.scene.frame {
+          canvas.tool = .select
+          canvas.select([])
+          let edge = CGPoint(x: f.maxX, y: f.midY)
+          drag(line(from: edge, to: CGPoint(x: edge.x + 60, y: edge.y)), in: canvas, flags: .command)
+          guard let grown = canvas.scene.frame, abs(grown.width - f.width - 60) < 1, grown.minX == f.minX else {
+            fail("dragging the frame's edge should widen it, got \(String(describing: canvas.scene.frame))")
+          }
+        }
         press(barButton(editor.canvasBar.bar, "Remove Frame"))
         guard canvas.scene.frame == nil else { fail("the frame button should remove the frame") }
         pass("the frame is added from the bar, picked and moved by its label, and removed with Delete or the bar")
@@ -797,6 +871,15 @@
         }
         _ = redraw()
         let actual = (0..<5).map { _ in redraw() }.sorted()[2]
+        // Panning: each step shows a new strip of the drawing.
+        @MainActor func pan() -> Double {
+          let visible = canvas.visibleRect
+          let start = CACurrentMediaTime()
+          canvas.scroll(CGPoint(x: visible.minX + 37, y: visible.minY + 23))
+          canvas.displayIfNeeded()
+          return (CACurrentMediaTime() - start) * 1000
+        }
+        let panning = (0..<9).map { _ in pan() }.sorted()[4]
         canvas.tool = .pen
         // Choosing the tool shows the style bar, which redraws the window once; the stroke is timed after.
         canvas.window?.displayIfNeeded()
@@ -816,8 +899,8 @@
         canvas.zoomToFit(nil)
         _ = redraw()
         let fit = (0..<3).map { _ in redraw() }.sorted()[1]
-        print(String(format: "  10,000 objects: redraw at 100%% %.1f ms, whole canvas %.1f ms, slowest frame drawing %.1f ms, undo %.1f ms", actual, fit, slowest, undoTime))
-        guard slowest < 16, actual < 50, undoTime < 100 else { fail("drawing on a large drawing is too slow") }
+        print(String(format: "  10,000 objects: redraw at 100%% %.1f ms, panning %.1f ms, whole canvas %.1f ms, slowest frame drawing %.1f ms, undo %.1f ms", actual, panning, fit, slowest, undoTime))
+        guard slowest < 16, actual < 50, panning < 16, undoTime < 100 else { fail("drawing on a large drawing is too slow") }
         pass("a drawing of 10,000 objects draws, strokes, and undoes quickly")
         document.updateChangeCount(.changeCleared)
         finish()
@@ -857,6 +940,43 @@
             target.canvas.zoomToFit(nil)
           }
           if environment["BRISTLE_SELECT"] == "all" { target.canvas.selectAll(nil) }
+          if environment["BRISTLE_BRUSHES"] == "1" {
+            // A stroke of every brush, one under another.
+            let c = target.canvas
+            var scene = Scene()
+            let colors = ["#1D1D1F", "#FF3B30", "#FF9500", "#34C759", "#007AFF", "#AF52DE", "#FF2D55", "#5AC8FA", "#FFD60A", "#1D1D1F"]
+            for (i, tool) in Controls.brushes.enumerated() {
+              guard let brush = tool.brush else { continue }
+              let raw = (0...80).map { k -> CGPoint in
+                let t = CGFloat(k) / 80
+                return CGPoint(x: 80 + t * 520, y: 60 + CGFloat(i) * 56 + sin(t * .pi * 2.5) * 16)
+              }
+              var e = Element(kind: .freehand)
+              tool.defaultStyle.apply(to: &e)
+              e.brush = brush
+              e.stroke = Color(hex: colors[i])
+              if brush == .pixel {
+                e.strokeWidth = 4
+                e.setWorldPoints(Freehand.pixels(raw, size: 4))
+              } else {
+                let pressures = brush.usesPressure ? Freehand.simulatedPressures(raw, size: e.strokeWidth) : []
+                let (points, smooth) = Freehand.smoothed(raw, pressures: pressures)
+                e.setWorldPoints(points)
+                e.pressures = brush.usesPressure ? smooth : []
+              }
+              scene.elements.append(e)
+              var label = Element(kind: .text)
+              label.text = tool.title
+              label.fontSize = 16
+              label.stroke = Color(hex: "#6E6E73")
+              label.x = 640
+              label.y = 48 + CGFloat(i) * 56
+              label.fitToText()
+              scene.elements.append(label)
+            }
+            c.drawing.replace(scene)
+            c.showDrawing()
+          }
           if environment["BRISTLE_PIXELS"] == "1" {
             // A small pixel drawing, zoomed in far enough to show the pixel grid.
             let c = target.canvas
@@ -876,6 +996,7 @@
             c.tool = .pixel
           }
           if environment["BRISTLE_PALETTE"] == "1" { target.togglePalette(nil) }
+          if environment["BRISTLE_TAB"] == "arrange" { target.palette.tab = .arrange }
           if let slot = environment["BRISTLE_SLOT"].flatMap(Int.init).flatMap(Editor.Slot.init(rawValue:)) { target.choose(slot) }
           if environment["BRISTLE_DRAW"] == "1" { target.choose(.draw) }
           if environment["BRISTLE_TYPE"] == "1" {
@@ -907,6 +1028,7 @@
             target.canvas.shapePreset = preset
           }
           target.styleBar.update()
+          target.palette.update()
           if let tip = environment["BRISTLE_PRESS"] {
             target.window?.contentView?.layoutSubtreeIfNeeded()
             if let button = target.styleBar.bar.buttons.first(where: { $0.toolTip?.hasPrefix(tip) == true }) {
