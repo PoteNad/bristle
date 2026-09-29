@@ -83,6 +83,14 @@
       guard let document = controller.documents.first as? BristleDocument, let editor = document.editor else {
         fail("expected a document window")
       }
+      // A small window, as on a small screen, when asked for.
+      if let size = environment["BRISTLE_WINDOW"]?.split(separator: "x").compactMap({ Double($0) }), size.count == 2,
+        !(editor.window.map { abs($0.contentLayoutRect.width - size[0]) < 1 } ?? true)
+      {
+        editor.window?.setContentSize(NSSize(width: size[0], height: size[1]))
+        editor.window?.contentView?.layoutSubtreeIfNeeded()
+        editor.canvas.showDrawing()
+      }
       editor.window?.makeKeyAndOrderFront(nil)
       editor.window?.makeFirstResponder(editor.canvas)
       // Checks can't take focus from whatever app is in front, so the canvas takes clicks anyway.
@@ -476,7 +484,12 @@
 
         // Every tool in the toolbar acts when clicked: the toolbar sends each tool's own action.
         for (slot, button) in editor.toolButtons where slot != .image {
-          click(CGPoint(x: button.bounds.midX, y: button.bounds.midY), in: button)
+          // On a small screen some groups are in the toolbar's overflow menu, not in the window.
+          if button.window != nil {
+            click(CGPoint(x: button.bounds.midX, y: button.bounds.midY), in: button)
+          } else if let action = button.action {
+            NSApp.sendAction(action, to: button.target, from: button)
+          }
           guard editor.currentSlot == slot, button.isOn else {
             fail("clicking \(button.accessibilityLabel() ?? "") chose \(canvas.tool) instead")
           }

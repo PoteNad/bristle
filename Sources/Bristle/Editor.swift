@@ -369,6 +369,18 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     item.view = row
     item.label = spec.label
     item.paletteLabel = spec.label
+    // In a narrow window the group moves into the toolbar's overflow menu, as a menu of its tools.
+    let menu = NSMenu(title: spec.label)
+    for slot in spec.slots {
+      let details = slotDetails(slot)
+      let entry = menu.addItem(withTitle: details.label, action: #selector(chooseSlotButton(_:)), keyEquivalent: "")
+      entry.target = self
+      entry.tag = slot.rawValue
+      entry.image = slotImage(slot)
+    }
+    let overflow = NSMenuItem(title: spec.label, action: nil, keyEquivalent: "")
+    overflow.submenu = menu
+    item.menuFormRepresentation = overflow
     DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.updateToolGroups() } }
     return item
   }
@@ -401,8 +413,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
   }
 
-  @objc func chooseSlotButton(_ sender: NSButton) {
-    guard let slot = Slot(rawValue: sender.tag) else { return }
+  @objc func chooseSlotButton(_ sender: Any?) {
+    guard let tag = (sender as? NSButton)?.tag ?? (sender as? NSMenuItem)?.tag, let slot = Slot(rawValue: tag) else { return }
     choose(slot, from: sender)
   }
 

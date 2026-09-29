@@ -706,8 +706,10 @@ final class CanvasClipView: NSClipView {
     let width = rect.width - left - right, height = rect.height - top - bottom
     // Centred when it fits the space left clear; otherwise scrolled no further than its edges
     // reaching that space's edges.
+    // The page is centred whenever it fits, even when the desk around it doesn't.
+    let desk = CanvasView.deskMargin
     func place(_ proposed: CGFloat, _ low: CGFloat, _ high: CGFloat, _ room: CGFloat, before: CGFloat, after: CGFloat) -> CGFloat {
-      if high - low <= room { return (low + high) / 2 - room / 2 - before }
+      if high - low - desk * 2 <= room { return (low + high) / 2 - room / 2 - before }
       return min(max(proposed, low - before), high + after - (room + before + after))
     }
     let x = place(proposedBounds.minX, doc.minX, doc.maxX, width, before: left, after: right)

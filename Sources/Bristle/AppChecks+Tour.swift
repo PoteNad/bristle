@@ -478,12 +478,16 @@
       canvas.drawing.replace(Scene())
       canvas.configuration.showsRulers = true
       defer { canvas.configuration.showsRulers = false }
+      editor.window?.contentView?.needsLayout = true
+      editor.window?.contentView?.layoutSubtreeIfNeeded()
       canvas.zoom(to: 1)
       canvas.center(on: canvas.scene.canvas.center)
       canvas.tool = .text
+      let room = canvas.unobscuredRect
+      let away = CGPoint(x: room.maxX - 40, y: room.maxY - 40)
       let before = Picture(canvas)
       before.paint(canvas)
-      click(CGPoint(x: 500, y: 300), in: canvas)
+      click(CGPoint(x: room.minX + 60, y: room.minY + 60), in: canvas)
       guard let typing = canvas.textEditor else { fail("the text tool should start typing") }
       typing.insertText("Plain", replacementRange: typing.selectedRange())
       canvas.window?.displayIfNeeded()
@@ -495,7 +499,7 @@
       }
       let after = Picture(canvas)
       after.paint(canvas)
-      guard after.color(at: CGPoint(x: 900, y: 600)) == before.color(at: CGPoint(x: 900, y: 600)) else {
+      guard !before.color(at: away).isEmpty, after.color(at: away) == before.color(at: away) else {
         fail("typing shouldn't change the canvas around the text")
       }
       if let undo = canvas.undoManager {
