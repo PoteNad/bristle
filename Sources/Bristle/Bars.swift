@@ -292,7 +292,7 @@ final class ZoomBar: NSObject {
     super.init()
     let out = BarButton(symbol: "minus", title: "Zoom Out (⌘−)", target: self, action: #selector(zoomOut(_:)))
     let into = BarButton(symbol: "plus", title: "Zoom In (⌘+)", target: self, action: #selector(zoomIn(_:)))
-    level = BarButton(text: "100%", tip: "Choose a zoom level", target: self, action: #selector(showLevels(_:)))
+    level = BarButton(text: "100%", tip: "Choose a zoom level. ⌘-click to fit the canvas, or back to 100%.", target: self, action: #selector(showLevels(_:)))
     level.widthAnchor.constraint(equalToConstant: 60).isActive = true
     bar.set([out, level, into])
   }
@@ -309,24 +309,34 @@ final class ZoomBar: NSObject {
   func levelsMenu() -> NSMenu {
     let menu = NSMenu(title: "Zoom")
     guard let canvas else { return menu }
-    for percent in [25, 50, 100, 200, 400] {
+    let fit = menu.addItem(withTitle: "Zoom to Fit", action: #selector(CanvasView.zoomToFit(_:)), keyEquivalent: "9")
+    fit.target = canvas
+    let actual = menu.addItem(withTitle: "Actual Size", action: #selector(CanvasView.actualSize(_:)), keyEquivalent: "0")
+    actual.target = canvas
+    let selection = menu.addItem(withTitle: "Zoom to Selection", action: #selector(CanvasView.zoomToSelection(_:)), keyEquivalent: "9")
+    selection.keyEquivalentModifierMask = [.command, .option]
+    selection.target = canvas
+    menu.addItem(.separator())
+    for percent in [25, 50, 100, 200, 400, 800] {
       let item = menu.addItem(withTitle: "\(percent)%", action: #selector(zoomTo(_:)), keyEquivalent: "")
       item.tag = percent
       item.target = self
       item.state = canvas.zoomPercent == percent ? .on : .off
     }
-    menu.addItem(.separator())
-    let fit = menu.addItem(withTitle: "Zoom to Fit", action: #selector(CanvasView.zoomToFit(_:)), keyEquivalent: "9")
-    fit.target = canvas
-    let selection = menu.addItem(withTitle: "Zoom to Selection", action: #selector(CanvasView.zoomToSelection(_:)), keyEquivalent: "9")
-    selection.keyEquivalentModifierMask = [.command, .option]
-    selection.target = canvas
-    let actual = menu.addItem(withTitle: "Actual Size", action: #selector(CanvasView.actualSize(_:)), keyEquivalent: "0")
-    actual.target = canvas
     return menu
   }
 
-  @objc private func showLevels(_ sender: NSButton) { popUpAbove(levelsMenu(), from: sender) }
+  /// A click shows the levels; a ⌘-click fits the whole canvas, or when it's already fitted,
+  /// goes back to actual size.
+  @objc private func showLevels(_ sender: NSButton) {
+    guard let canvas else { return }
+    if NSApp.currentEvent?.modifierFlags.contains(.command) == true {
+      let fitted = abs(canvas.magnification - canvas.fitMagnification) < 0.005
+      if fitted { canvas.actualSize(sender) } else { canvas.zoomToFit(sender) }
+      return
+    }
+    popUpAbove(levelsMenu(), from: sender)
+  }
 
   @objc func zoomTo(_ sender: NSMenuItem) { canvas?.zoom(to: CGFloat(sender.tag) / 100) }
 }

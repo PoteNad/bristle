@@ -479,8 +479,9 @@ public final class CanvasView: NSView {
   private func drawGrid(in context: CGContext, dirty: CGRect, scale: CGFloat) {
     // The pixel grid takes over when zoomed in far.
     guard configuration.showsGrid, scale < Self.pixelGridZoom else { return }
+    // Zoomed out, every other dot goes, and so on, so they never crowd closer than a few points.
     var spacing = configuration.gridSpacing
-    while spacing * scale < 14 { spacing *= 2 }
+    while spacing * scale < 7 { spacing *= 2 }
     let dot = max(1 / scale, 0.25)
     context.setFillColor(canvasIsDark ? CGColor(gray: 1, alpha: 0.25) : CGColor(gray: 0, alpha: 0.2))
     // All the dots are one path, filled at once, which is far quicker than one at a time.
@@ -592,6 +593,13 @@ public final class CanvasView: NSView {
     return CGSize(
       width: clip.frame.width - insets.left - insets.right - fitInsets.left - fitInsets.right,
       height: clip.frame.height - insets.top - insets.bottom - fitInsets.top - fitInsets.bottom)
+  }
+
+  /// The zoom Zoom to Fit gives.
+  public var fitMagnification: CGFloat {
+    let room = roomToFit, area = scene.canvas
+    let fit = min(room.width / max(area.width, 1), room.height / max(area.height, 1))
+    return min(scrollView.maxMagnification, max(scrollView.minMagnification, fit))
   }
 
   func zoom(toFit area: CGRect, largest: CGFloat) {

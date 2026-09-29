@@ -432,6 +432,12 @@
         guard chosen == [slot] else { fail("choosing \(slot) should mark only it in the toolbar, got \(chosen)") }
       }
       editor.choose(.select)
+      // Every tool's tip names its key, as the menus name theirs.
+      for (slot, button) in editor.toolButtons {
+        guard let tip = button.toolTip, tip.range(of: #"\(.+\)$"#, options: .regularExpression) != nil else {
+          fail("the \(slot) tool's tip should show its key, got \(button.toolTip ?? "none")")
+        }
+      }
       // Every tool starts at one of the widths the bar offers, so one of them shows it's chosen.
       for tool in Tool.allCases where [Tool.select, .eyedropper, .fill, .text].contains(tool) == false {
         let width = tool.defaultStyle.strokeWidth

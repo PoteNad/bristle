@@ -22,7 +22,8 @@ enum PreferenceKey {
   /// The canvas a new drawing starts with: its width and height, and whether it's transparent.
   static let newCanvasWidth = "newCanvasWidth"
   static let newCanvasHeight = "newCanvasHeight"
-  static let newCanvasTransparent = "newCanvasTransparent"
+  /// The new canvas's colour, as hex, or empty for transparent.
+  static let newCanvasBackground = "newCanvasBackground"
 }
 
 enum AppAppearance: String, CaseIterable {
@@ -91,7 +92,7 @@ enum AppPreferences {
   static let settingKeys = [
     PreferenceKey.appearance, PreferenceKey.snapsToGuides, PreferenceKey.showsGrid, PreferenceKey.snapsToGrid,
     PreferenceKey.showsRulers, PreferenceKey.gridSpacing, PreferenceKey.returnsToSelect, PreferenceKey.barHidesWithPalette,
-    PreferenceKey.barsAutoHide, PreferenceKey.newCanvasWidth, PreferenceKey.newCanvasHeight, PreferenceKey.newCanvasTransparent,
+    PreferenceKey.barsAutoHide, PreferenceKey.newCanvasWidth, PreferenceKey.newCanvasHeight, PreferenceKey.newCanvasBackground,
   ]
 
   static func registerDefaults() {
@@ -107,7 +108,7 @@ enum AppPreferences {
       PreferenceKey.barsAutoHide: false,
       PreferenceKey.newCanvasWidth: Double(Paper.standardSize.width),
       PreferenceKey.newCanvasHeight: Double(Paper.standardSize.height),
-      PreferenceKey.newCanvasTransparent: false,
+      PreferenceKey.newCanvasBackground: "#FFFFFF",
     ])
   }
 
@@ -116,7 +117,12 @@ enum AppPreferences {
     guard !isAutomatedCheck else { return Scene() }
     let defaults = UserDefaults.standard
     let size = CGSize(width: defaults.double(forKey: PreferenceKey.newCanvasWidth), height: defaults.double(forKey: PreferenceKey.newCanvasHeight))
-    return Scene(paper: Paper(size: size, background: defaults.bool(forKey: PreferenceKey.newCanvasTransparent) ? nil : .white))
+    return Scene(paper: Paper(size: size, background: newCanvasBackground))
+  }
+
+  /// The colour a new canvas starts with, or `nil` for transparent.
+  static var newCanvasBackground: Color? {
+    Color(hex: UserDefaults.standard.string(forKey: PreferenceKey.newCanvasBackground) ?? "")
   }
 
   static var appearance: AppAppearance {
@@ -125,9 +131,13 @@ enum AppPreferences {
 
   @MainActor static func applyAppearance() { NSApp.appearance = appearance.value }
 
+  /// How far apart the grid's dots are, in points. Each is a step the rulers mark, so the dots
+  /// line up with them.
+  static let gridSpacings: [Int] = [5, 10, 20, 25, 50, 100]
+
   static var gridSpacing: CGFloat {
-    let value = UserDefaults.standard.double(forKey: PreferenceKey.gridSpacing)
-    return [8, 10, 16, 20, 25, 32, 50].contains(value) ? value : 20
+    let value = UserDefaults.standard.integer(forKey: PreferenceKey.gridSpacing)
+    return CGFloat(gridSpacings.contains(value) ? value : 20)
   }
 
   static var canvasConfiguration: CanvasConfiguration {
@@ -202,9 +212,16 @@ final class SettingsWindowController: NSWindowController {
     }
     width.setAccessibilityLabel("New canvas width")
     height.setAccessibilityLabel("New canvas height")
-    background.addItems(withTitles: ["White", "Transparent"])
-    for spacing in [8, 10, 16, 20, 25, 32, 50] {
-      gridSpacing.addItem(withTitle: "\(spacing) points")
+    // The same backgrounds the Palette offers, with transparent last.
+    for color in Controls.fills {
+      background.addItem(withTitle: color == .white ? "White" : color.name.prefix(1).uppercased() + color.name.dropFirst())
+      background.lastItem?.representedObject = color.hex
+    }
+    background.menu?.addItem(.separator())
+    background.addItem(withTitle: "Transparent")
+    background.lastItem?.representedObject = ""
+    for spacing in AppPreferences.gridSpacings {
+      gridSpacing.addItem(withTitle: "Every \(spacing) points")
       gridSpacing.lastItem?.tag = spacing
     }
     afterAdding.addItems(withTitles: ["Keep the tool", "Switch to Select"])
@@ -222,19 +239,13 @@ final class SettingsWindowController: NSWindowController {
       control.setAccessibilityHelp(text)
     }
     describe(appearanceControl, "Light or dark windows. Drawings keep their own colours either way.")
-    describe(background, "Transparent canvases export as PNGs you can place over anything.")
+    describe(background, "The colour new drawings start with. Transparent canvases export as PNGs you can place over anything.")
+    describe(gridSpacing, "How far apart the grid's dots are. When zoomed out, fewer are shown so they don't crowd.")
     describe(guides, "While moving and resizing, line up edges and middles with other objects and the canvas. Hold ⌘ to place freely.")
     describe(afterAdding, "What happens after you add one shape, line, or text box.")
     describe(barsAutoHide, "Keeps the canvas clear until you move the pointer to the bottom of the window.")
 
     func label(_ text: String) -> NSTextField { NSTextField(labelWithString: text) }
-    func note(_ text: String) -> NSTextField {
-      let field = NSTextField(wrappingLabelWithString: text)
-      field.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-      field.textColor = .secondaryLabelColor
-      field.preferredMaxLayoutWidth = 300
-      return field
-    }
     let size = NSStackView(views: [width, label("×"), height, label("points")])
     size.spacing = 6
     let grid = NSStackView(views: [showsGrid, gridSpacing])
@@ -242,9 +253,8 @@ final class SettingsWindowController: NSWindowController {
     let empty = NSGridCell.emptyContentView
     let form = NSGridView(views: [
       [label("Appearance:"), appearanceControl],
-      [empty, note("The window follows it; drawings keep their own colours.")],
-      [label("New canvas:"), size],
-      [label("Background:"), background],
+      [label("New canvas size:"), size],
+      [label("New canvas colour:"), background],
       [label("Canvas:"), grid],
       [empty, snapsToGrid],
       [empty, guides],
@@ -258,7 +268,8 @@ final class SettingsWindowController: NSWindowController {
     form.column(at: 0).xPlacement = .trailing
     form.rowAlignment = .firstBaseline
     // A little room above each group.
-    for row in [2, 4, 8, 9] { form.row(at: row).topPadding = 10 }
+    for row in [1, 3, 7, 8] { form.row(at: row).topPadding = 10 }
+    _ = empty
     let restore = NSButton(title: "Restore Defaults", target: self, action: #selector(restoreDefaults))
     describe(restore, "Put every setting back as it was when Bristle was new.")
     let content = NSView()
@@ -300,7 +311,8 @@ final class SettingsWindowController: NSWindowController {
     appearanceControl.selectedSegment = AppAppearance.allCases.firstIndex(of: AppPreferences.appearance) ?? 0
     if width.currentEditor() == nil { width.doubleValue = defaults.double(forKey: PreferenceKey.newCanvasWidth) }
     if height.currentEditor() == nil { height.doubleValue = defaults.double(forKey: PreferenceKey.newCanvasHeight) }
-    background.selectItem(at: defaults.bool(forKey: PreferenceKey.newCanvasTransparent) ? 1 : 0)
+    let hex = AppPreferences.newCanvasBackground?.hex ?? ""
+    background.selectItem(at: max(0, background.indexOfItem(withRepresentedObject: hex)))
     showsGrid.state = defaults.bool(forKey: PreferenceKey.showsGrid) ? .on : .off
     gridSpacing.selectItem(withTag: Int(AppPreferences.gridSpacing))
     snapsToGrid.state = defaults.bool(forKey: PreferenceKey.snapsToGrid) ? .on : .off
@@ -321,7 +333,7 @@ final class SettingsWindowController: NSWindowController {
     let size = Paper.clamped(CGSize(width: width.doubleValue, height: height.doubleValue))
     defaults.set(Double(size.width), forKey: PreferenceKey.newCanvasWidth)
     defaults.set(Double(size.height), forKey: PreferenceKey.newCanvasHeight)
-    defaults.set(background.indexOfSelectedItem == 1, forKey: PreferenceKey.newCanvasTransparent)
+    defaults.set(background.selectedItem?.representedObject as? String ?? "#FFFFFF", forKey: PreferenceKey.newCanvasBackground)
     defaults.set(showsGrid.state == .on, forKey: PreferenceKey.showsGrid)
     if let spacing = gridSpacing.selectedItem?.tag, spacing > 0 { defaults.set(spacing, forKey: PreferenceKey.gridSpacing) }
     defaults.set(snapsToGrid.state == .on, forKey: PreferenceKey.snapsToGrid)

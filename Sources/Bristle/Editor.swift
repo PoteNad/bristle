@@ -289,7 +289,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
   private func slotDetails(_ slot: Slot) -> (symbol: String, label: String, tip: String) {
     switch slot {
     case .select: ("cursorarrow", "Select", "Select (V)")
-    case .draw: (lastBrush.symbol, "Draw", "Draw (P)")
+    case .draw: (lastBrush.symbol, "Draw", lastBrush.key.isEmpty ? "Draw: \(lastBrush.title)" : "Draw: \(lastBrush.title) (\(lastBrush.key.uppercased()))")
     case .eraser: ("eraser", "Eraser", "Eraser (E)")
     case .fill: ("drop", "Fill", "Fill (F)")
     case .eyedropper: ("eyedropper", "Pick Color", "Pick Color (I)")
@@ -303,11 +303,21 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
   }
 
-  /// A tool's symbol.
+  /// A tool's symbol. The arrow's weight is in its head, at the left, so it's moved a point to
+  /// the right to look centred in its circle.
   private func slotImage(_ slot: Slot) -> NSImage {
     let details = slotDetails(slot)
-    return NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
+    let symbol = NSImage(systemSymbolName: details.symbol, accessibilityDescription: details.label)?
       .withSymbolConfiguration(.init(pointSize: 15, weight: .regular)) ?? NSImage()
+    guard slot == .select else { return symbol }
+    let shift: CGFloat = 1
+    let image = NSImage(size: NSSize(width: symbol.size.width + shift * 2, height: symbol.size.height), flipped: false) { rect in
+      symbol.draw(in: NSRect(x: shift * 2, y: 0, width: symbol.size.width, height: symbol.size.height))
+      return true
+    }
+    image.isTemplate = true
+    image.accessibilityDescription = details.label
+    return image
   }
 
   func toolbar(
@@ -354,7 +364,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     }
     let row = NSStackView(views: buttons)
     row.spacing = 2
-    row.edgeInsets = NSEdgeInsets(top: 0, left: 4, bottom: 0, right: 4)
+    row.edgeInsets = NSEdgeInsets(top: 0, left: 2, bottom: 0, right: 2)
     let item = NSToolbarItem(itemIdentifier: itemIdentifier)
     item.view = row
     item.label = spec.label
@@ -384,7 +394,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     let current = currentSlot
     for (slot, button) in toolButtons {
       button.isOn = slot == current
-      if slot == .draw { button.image = slotImage(.draw) }
+      if slot == .draw {
+        button.image = slotImage(.draw)
+        button.toolTip = slotDetails(.draw).tip
+      }
     }
   }
 
@@ -678,7 +691,9 @@ final class EditorView: NSView {
     super.layout()
     canvas?.frame = bounds
     let margin = Self.margin
-    let inset = safeAreaInsets
+    var inset = safeAreaInsets
+    // The bars sit beside the vertical ruler, not over it.
+    if let scroll = canvas as? NSScrollView, scroll.rulersVisible { inset.left += scroll.verticalRulerView?.requiredThickness ?? 0 }
     var left = NSRect.zero
     if let zoom {
       let size = zoom.fittingSize
@@ -689,7 +704,7 @@ final class EditorView: NSView {
     if let style, !style.isHidden {
       let size = style.fittingSize
       var frame = NSRect(x: ((bounds.width - size.width) / 2).rounded(), y: inset.bottom + margin, width: size.width, height: size.height)
-      if frame.minX < left.maxX + 8 || frame.maxX > bounds.maxX - left.maxX - 8 { frame.origin.y = left.maxY + 8 }
+      if frame.minX < left.maxX + 8 || frame.maxX > bounds.maxX - (left.maxX - inset.left) - 8 { frame.origin.y = left.maxY + 8 }
       style.frame = frame
       top = max(top, frame.maxY)
     }
