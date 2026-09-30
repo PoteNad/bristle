@@ -264,6 +264,10 @@ public final class CanvasView: NSView {
       return (low - margin, length + margin * 2)
     }
     let across = span(page.minX, page.width, room.width), down = span(page.minY, page.height, room.height)
+    // Where it fits, it doesn't bounce either: there's nothing there to scroll to.
+    let fitsAcross = page.width + pad * 2 <= room.width, fitsDown = page.height + pad * 2 <= room.height
+    scrollView.horizontalScrollElasticity = fitsAcross ? .none : .automatic
+    scrollView.verticalScrollElasticity = fitsDown ? .none : .automatic
     var rect = CGRect(x: across.origin, y: down.origin, width: across.length, height: down.length)
     if case .canvasResizing = interaction { rect = rect.union(bounds) }
     guard abs(rect.minX - bounds.minX) + abs(rect.minY - bounds.minY) + abs(rect.width - bounds.width) + abs(rect.height - bounds.height) > 0.01
