@@ -767,6 +767,14 @@ final class CanvasClipView: NSClipView {
 /// handled here rather than by the canvas, since a document view that handles the scroll wheel
 /// itself loses AppKit's responsive scrolling, which pans a large drawing smoothly.
 final class CanvasScrollView: NSScrollView {
+  /// Scroll bars always float over the canvas, as in Maps and Freeform, even with a mouse
+  /// plugged in. Bars that take room change the room the canvas has as they come and go, which
+  /// would nudge the canvas around.
+  override var scrollerStyle: NSScroller.Style {
+    get { .overlay }
+    set { super.scrollerStyle = .overlay }
+  }
+
   override func scrollWheel(with event: NSEvent) {
     if event.modifierFlags.contains(.command), let canvas = documentView as? CanvasView,
       event.phase != .ended || event.scrollingDeltaY != 0

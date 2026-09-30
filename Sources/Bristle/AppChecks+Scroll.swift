@@ -90,6 +90,10 @@
           scene.elements.append(e)
         }
         canvas.drawing.replace(scene)
+        // With a mouse plugged in, the system asks for scroll bars that take room; the canvas's
+        // stay floating over it, so they never change the room it has.
+        canvas.scrollView.scrollerStyle = .legacy
+        guard canvas.scrollView.scrollerStyle == .overlay else { fail("the canvas's scroll bars should always float over it") }
         var configuration = canvas.configuration
         configuration.showsGrid = true
         configuration.showsRulers = true
@@ -174,7 +178,11 @@
             let fitsAcross = page.width * zoom + 2 * CanvasView.handleRoom <= room.width * zoom + 0.5
             let fitsDown = page.height * zoom + 2 * CanvasView.handleRoom <= room.height * zoom + 0.5
             if dx != 0 && fitsAcross { guard abs(moved.x) < 0.01 else { fail("at \(Int(zoom * 100))%, with the canvas fitting across, it scrolled sideways \(moved.x)") } }
-            if dy != 0 && fitsDown { guard abs(moved.y) < 0.01 else { fail("at \(Int(zoom * 100))%, with the canvas fitting top to bottom, it scrolled \(moved.y)") } }
+            if dy != 0 && fitsDown {
+              guard abs(moved.y) < 0.01 else {
+                fail("at \(Int(zoom * 100))%, with the canvas fitting top to bottom, it scrolled \(moved.y): view \(canvas.frame), clip \(canvas.scrollView.contentView.bounds) in \(canvas.scrollView.contentView.frame), insets \(canvas.scrollView.contentView.contentInsets), window \(canvas.window?.contentLayoutRect ?? .zero), scrollers \(canvas.scrollView.scrollerStyle.rawValue)")
+              }
+            }
             if dx != 0 && !fitsAcross { guard abs(moved.x) > 0.01 || true else { fail("") } }
           }
           // It sits in the middle of the room it has.
