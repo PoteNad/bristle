@@ -254,6 +254,19 @@ final class Controls {
   static let pointSizes: [CGFloat] = [10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 48, 56, 64, 72, 96, 128]
   static let brushes: [Tool] = [.pencil, .pen, .calligraphy, .oil, .crayon, .marker, .watercolor, .airbrush, .highlighter, .pixel]
 
+  /// A menu item's title with the key that chooses it on the canvas at the right, where a menu
+  /// shows shortcuts. The key isn't the item's own, so it can't get in the way of typing.
+  static func menuTitle(_ title: String, key: String) -> NSAttributedString {
+    let font = NSFont.menuFont(ofSize: 0)
+    let paragraph = NSMutableParagraphStyle()
+    paragraph.tabStops = [NSTextTab(textAlignment: .right, location: 170)]
+    let text = NSMutableAttributedString(string: title, attributes: [.font: font, .paragraphStyle: paragraph])
+    guard !key.isEmpty else { return text }
+    text.append(NSAttributedString(
+      string: "\t" + key.uppercased(), attributes: [.font: font, .paragraphStyle: paragraph, .foregroundColor: NSColor.secondaryLabelColor]))
+    return text
+  }
+
   weak var canvas: CanvasView?
   private var targets: [ClosureTarget] = []
   private(set) var refreshers: [() -> Void] = []

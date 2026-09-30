@@ -116,7 +116,7 @@ func rectangle(_ frame: CGRect, id: String = Element.newID()) -> Element {
 @MainActor @Suite struct Photos {
   @Test func removingTheBackgroundKeepsTheSubject() throws {
     guard #available(macOS 14.0, *) else { return }
-    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Assets/Bristle-Screenshot.png")
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/Drawing.png")
     let data = try Data(contentsOf: url)
     let original = try #require(ImageStore.decode(data))
     let cut = try #require(CanvasView.subject(of: data))

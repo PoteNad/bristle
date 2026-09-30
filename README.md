@@ -1,8 +1,8 @@
 # Bristle
 
-Bristle is a small, native macOS drawing app. It has the immediacy of a paint program — pick a pencil and draw — but everything you draw stays an editable object: shapes, lines and arrows, freehand strokes, text, and images. Nothing is flattened into pixels behind your back, so you can open a screenshot, mark it up, save an ordinary PNG, and reopen it later with every annotation still editable. Bristle requires macOS 13 or newer, works entirely offline, and has no third-party dependencies.
+Bristle is a small, native macOS drawing app. You draw with pencils, brushes, shapes, lines, and text on a canvas, like in MS Paint, but everything you draw can still be moved, resized, recolored, or edited later. It saves drawings as readable `.bristle` files or as PNGs that reopen with every object intact. Bristle requires macOS 13 or newer, works entirely offline, and has no third-party dependencies.
 
-![Bristle drawing shapes, an arrow, ink, and text on its canvas, with a stroke selected and its style bar at the bottom](Assets/Bristle-Screenshot.png)
+![Bristle editing a drawing of shapes, strokes, an arrow, and text in dark mode](Assets/Bristle-Screenshot.png)
 
 ## Install
 
@@ -18,37 +18,35 @@ The Homebrew cask verifies the app bundle and removes its quarantine attribute s
 
 ## How it works
 
-- **The canvas** is a page, as MS Paint's is: 1200 × 800 points to start (Settings can change that), white or transparent or any colour, and it looks the same in light and dark, as a page in Pages does; only the grey around it follows the appearance. Drag its handles at the right, the bottom, and the corner to resize it, with any tool, or its edges with Select. Canvas ▸ Canvas Size sets it exactly, keeping the drawing at any corner or the middle; Crop to Selection (⌘K) and Fit Canvas to Drawing fit it to what's there; and Canvas ▸ Rotate and Flip turn the whole thing. Anything moved off the canvas is kept, out of sight, until the canvas grows to show it again. View ▸ Show Rulers (⌘R) adds rulers in points from its corner.
-- **The toolbar** holds every tool, one click each, the tool in use marked by the same circle the bars use, grouped as MS Paint's ribbon is: Select; Draw, Eraser, Fill, and Pick Color; Rectangle, Ellipse, Shapes, Line, and Arrow; then Text and Image. Every tool also has a key: V Select, P Pencil, B Brush, M Highlighter, C Calligraphy, S Airbrush, X Pixel, E Eraser, F Fill, R Rectangle, O Ellipse, G Polygon, L Line, A Arrow, T Text, I Eyedropper. Hold Space to pan.
-- **The style bar** at the bottom centre changes with what you're doing, as Freeform's does: a menu of brushes, the width, and the colour while drawing; how the eraser erases; and for a selection, its stroke and fill colours, width, line style, arrowheads, font, size, and alignment, with a menu to arrange it. Its Style button sets any width, the opacity, and the line style. Colours, with a square of shades, a strip of hues, and a hex field for any other, and menus open above the bar, inside the window. The bar hides when there's nothing to style.
-- **Like MS Paint:** the Polygon tool draws a gallery of shapes with one drag (triangles, a diamond, stars, a heart, lightning, arrows, and a speech bubble), each an editable polygon; Select draws a box or a free-form loop; Edit ▸ Invert Selection picks everything else; and Format ▸ Remove Background keeps a photo's subject and clears the rest, worked out on your Mac (macOS 14 or newer).
-- **Pixel art.** The Pixel brush paints square pixels, 1, 2, or 4 wide, on the grid a PNG export has. Zoomed in past 800%, the grid shows every pixel, and images show their own pixels square.
-- **Selections** get a dotted outline that follows each object's shape, as Freeform draws them. Lines have a handle in the middle of each segment: drag it to bend the line, as in Excalidraw.
-- **The zoom control** at the bottom left holds the zoom level and a menu of levels; ⌘-click the level to fit the canvas, and again to go back to 100%. Zooming keeps the middle of the view where it was, and a canvas smaller than the window sits in its middle.
-- **The Palette** is a sidebar, shown and hidden with the brush button (⇧⌘C) like Plainst's symbols sidebar, with everything the style bar has and more, as Keynote's Format inspector has it: a Style tab with every brush, colour, width, line, corner radius, font, and size, and an Arrange tab with exact position, size, and rotation, layers, alignment, distribution, flips, and actions. With nothing selected, it shows the canvas: box or free-form selection, its size, with common sizes, and its background. Settings can have the style bar step aside while it's open, and show the bars only when the pointer is near them. Double-click its edge to put it back to its usual width.
-- **Settings** hold how Bristle looks, the size and background of new drawings, the grid, with dots every 5 to 100 points so they line up with the rulers, snapping, and rulers (also in the View menu), what happens after adding a shape, and how the bars behave.
-- **Opening an image** makes a canvas its own size, with the image locked in place on it, ready to mark up. Saving an unedited image writes back the same bytes.
-- **PNGs keep the drawing.** A PNG saved by Bristle is an ordinary image everywhere else, and also carries the drawing in a private chunk, so it reopens in Bristle with every object editable. If the image is changed in another app, Bristle notices that the pixels no longer match, opens the image as it is now, and offers to restore the earlier objects.
+- **The canvas** is a page with a fixed size, 1200 × 800 points by default. Drag the handles on its right edge, bottom edge, or corner to resize it, or use Canvas ▸ Canvas Size to set an exact size. Crop to Selection (⌘K) and Fit Canvas to Drawing trim it to what you've drawn. Anything moved off the canvas is kept and shows up again if the canvas grows.
+- **The toolbar** has every tool, grouped like the ribbon in MS Paint: Select; Draw, Eraser, Fill, and Pick Color; Rectangle, Ellipse, Shapes, Line, and Arrow; then Text and Image. Each tool has a single-key shortcut, shown in its tooltip and in View ▸ Tool. Hold Space and drag to pan.
+- **The style bar** at the bottom of the window shows the options for what you're doing: brush, width, and color while drawing, or stroke, fill, line style, arrowheads, and font for whatever is selected. Colors open in a picker inside the window, with swatches, a color square, and a hex field.
+- **The Palette** (⇧⌘C) is a sidebar with every style option and an Arrange tab for exact position, size, rotation, alignment, and layer order. With nothing selected, it shows the canvas size and background.
+- **Selections** get a dotted outline that follows each object's shape. Drag the handle in the middle of a line to bend it.
+- **Opening an image** makes a canvas the size of the image, with the image locked in place so you can mark it up. Saving an image you haven't changed writes back the same bytes.
+- **PNGs keep the drawing.** A PNG saved by Bristle opens as a normal image everywhere else, but Bristle stores the drawing inside it too, so reopening it in Bristle gives you every object back. If another app changes the image, Bristle opens the new pixels and offers to restore the old objects.
 
-Bristle deliberately leaves out layers panels, filters and photo adjustments, custom brush engines, blend modes, animation, collaboration, and anything that needs an account or the network. The eraser and the fill tool work on objects, not pixels: the Pixel eraser rubs out the parts of freehand strokes it passes over, and the Object eraser removes whole objects; the fill tool fills shapes, or the canvas when you click empty space.
+Bristle leaves out layers, filters, photo adjustments, blend modes, animation, collaboration, and anything that needs an account. The eraser and fill tool work on objects rather than pixels: the Pixel eraser rubs out parts of freehand strokes, the Object eraser removes whole objects, and the fill tool fills a shape or, on empty space, the canvas itself.
 
 ## Features
 
 - Native document windows and tabs, autosave, versions, recovery of unsaved drawings, Revert, Duplicate, Rename, and Move.
-- Pencil, pressure-sensitive brush, calligraphy brush, oil brush, crayon, marker, watercolour, airbrush, highlighter, and pixel brush, as MS Paint has, with smoothing, tablet pressure, and speed-based thickness with a mouse.
-- Lines and arrows with arrowheads, curves, and ends that attach to shapes and follow them; rectangles with rounded corners, ellipses, and polygons that can be curved.
-- Text typed in place, with the font panel, sizes, alignment, and colours.
-- Images placed from files, the clipboard, drag and drop, and Continuity Camera and Sketch, with cropping (double-click an image) and flipping.
-- Move, resize, rotate, duplicate (⌘D, or Option-drag), align, distribute, group and enter groups, lock, and stacking order, with alignment guides, an optional grid, and nudging with the arrow keys.
-- Copy Style and Paste Style, Select All, and Tab to move from object to object.
-- Copying writes Bristle objects, PNG, and PDF, so a copy pastes as editable objects in Bristle and as a picture everywhere else; objects can be dragged out to other apps.
-- Export as PNG (optionally editable in Bristle), SVG, PDF, or JPEG at 1×, 2×, or 3×; Print; and Share.
-- Zoom from 5% to 3200% by pinching, ⌘-scrolling, the zoom control, or ⌘+, ⌘−, ⌘0, and ⌘9.
-- Light and dark appearances, full keyboard access, and VoiceOver descriptions of every object on the canvas.
+- Pencil, brush, calligraphy, oil, crayon, marker, watercolor, airbrush, highlighter, and pixel brushes, with smoothing and pressure from a tablet or from how fast you draw with a mouse.
+- Pixel art with a 1, 2, or 4 point pixel brush, and a pixel grid when zoomed in past 800%.
+- Lines and arrows that can curve and attach to shapes, rectangles with rounded corners, ellipses, polygons, and a set of ready-made shapes like stars, arrows, and speech bubbles.
+- Text typed straight onto the canvas, with fonts, sizes, alignment, and colors.
+- Images from files, the clipboard, drag and drop, or an iPhone or iPad with Continuity Camera, with cropping, flipping, and Remove Background on macOS 14 or newer.
+- Move, resize, rotate, duplicate, align, distribute, group, lock, and reorder, with alignment guides, an optional grid, rulers, and arrow-key nudging.
+- A tap on the trackpad when something snaps into line, when an arrow attaches to a shape, and when pinching passes 100%.
+- Box and free-form selection, Invert Selection, Copy Style and Paste Style, and Tab to move between objects.
+- Copying puts Bristle objects, PNG, and PDF on the clipboard, so a copy pastes as objects in Bristle and as a picture anywhere else.
+- Export to PNG, SVG, PDF, or JPEG at 1×, 2×, or 3×, plus Print and Share.
+- Zoom from 10% to 1600% by pinching, ⌘-scrolling, the zoom control, or ⌘+, ⌘−, ⌘0, and ⌘9. ⌘-click the zoom level to fit the canvas.
+- Light and dark appearances, full keyboard access, and VoiceOver descriptions of every object. The drawing itself looks the same in both appearances.
 
 ## File format
 
-A `.bristle` file is JSON, written with one object per line so it reads and diffs well:
+A `.bristle` file is JSON with one object per line, so it's easy to read and to diff:
 
 ```json
 {
@@ -63,14 +61,14 @@ A `.bristle` file is JSON, written with one object per line so it reads and diff
 }
 ```
 
-- `canvas` gives its `width` and `height` in points, from the origin; its `background` colour, or `null` for a transparent canvas (white when it's left out); and optionally a `resolution` in pixels per inch for exported images. Early drawings with a `frame`, `[x, y, width, height]`, open with everything moved so the frame's corner is the origin.
-- `elements` lists objects from back to front. Each has an `id`, a `type` (`rectangle`, `ellipse`, `polygon`, `line`, `arrow`, `freehand`, `text`, or `image`), and a frame (`x`, `y`, `width`, `height`) that `rotation` (radians, clockwise) turns about its centre. Values left at their defaults are omitted: `stroke` (a colour, or `null` for none, default `#1D1D1F`), `strokeWidth` (3), `dash` (`solid`, `dashed`, or `dotted`), `fill`, `opacity` (1), `cornerRadius`, `locked`, and `groups`, the ids of the groups the object belongs to, innermost first.
-- Polygons, lines, arrows, and freehand strokes have `points` relative to the frame's corner; strokes add `brush` (`pencil`, `pen`, `highlighter`, `calligraphy`, `airbrush`, `crayon`, `marker`, `watercolor`, `oil`, or `pixel`, whose `points` are the centres of its pixels) and optional `pressures`, and lines add `curved`, `startArrowhead` and `endArrowhead` (`none`, `arrow`, `triangle`, `circle`, or `bar`), and `startBinding` and `endBinding`, which attach an end to another object at an `anchor` given in that object's unit coordinates.
+- `canvas` has the canvas's `width` and `height` in points, its `background` color (`null` for transparent, white if it's missing), and an optional `resolution` in pixels per inch for exported images.
+- `elements` lists objects from back to front. Each has an `id`, a `type` (`rectangle`, `ellipse`, `polygon`, `line`, `arrow`, `freehand`, `text`, or `image`), and a frame (`x`, `y`, `width`, `height`) that `rotation` (radians, clockwise) turns about its center. Values left at their defaults are omitted: `stroke` (a color, or `null` for none, default `#1D1D1F`), `strokeWidth` (3), `dash` (`solid`, `dashed`, or `dotted`), `fill`, `opacity` (1), `cornerRadius`, `locked`, and `groups`, the ids of the groups the object belongs to, innermost first.
+- Polygons, lines, arrows, and freehand strokes have `points` relative to the frame's corner; strokes add `brush` (`pencil`, `pen`, `highlighter`, `calligraphy`, `airbrush`, `crayon`, `marker`, `watercolor`, `oil`, or `pixel`, whose `points` are the centers of its pixels) and optional `pressures`, and lines add `curved`, `startArrowhead` and `endArrowhead` (`none`, `arrow`, `triangle`, `circle`, or `bar`), and `startBinding` and `endBinding`, which attach an end to another object at an `anchor` given in that object's unit coordinates.
 - Text has `text`, `font` (a PostScript name, or omitted for the system font), `fontSize`, `textAlign`, and `fixedWidth` when it wraps at its width.
 - Images have `file`, a key into `files`, which holds each image's type and its original bytes in base64, and optionally `crop` (`[x, y, width, height]` of the image, from 0 to 1), `flipX`, and `flipY`.
-- Colours are `#RRGGBB` or `#RRGGBBAA` in sRGB. Readers ignore members they don't know, and a newer major `version` is refused rather than misread.
+- Colors are `#RRGGBB` or `#RRGGBBAA` in sRGB. Unknown members are ignored, and a file with a newer `version` is refused instead of being misread.
 
-In a PNG saved by Bristle, the same JSON is stored zlib-compressed in a private, unsafe-to-copy `brSC` chunk, with one more top-level member, `pixels`: a SHA-256 hash of the image's pixels, which tells Bristle whether the image was changed elsewhere.
+A PNG saved by Bristle stores the same JSON, zlib-compressed, in a private `brSC` chunk. It adds one member, `pixels`, a SHA-256 hash of the image's pixels, so Bristle can tell if another app changed the image.
 
 ## Build from source
 
@@ -81,11 +79,11 @@ Bristle needs Xcode or the Command Line Tools with the macOS 26 SDK or newer. Th
 open build/Bristle.app
 ```
 
-The build is optimized and ad-hoc signed for the current Mac. Open `Package.swift` in Xcode to work on the source. Run `./scripts/check.sh` for the full test suite, which includes end-to-end checks of drawing with the pointer, saving, opening, byte-identical round trips, and restoring unsaved drawings. After editing the icon in Icon Composer, run `swift scripts/make-icon.swift` to update `Assets/Bristle-Liquid.png` and `Assets/Bristle.icns`.
+The build is optimized and ad-hoc signed for the current Mac. Open `Package.swift` in Xcode to work on the source. Run `./scripts/check.sh` for the full test suite, which drives the real app to draw, scroll, zoom, save, and reopen, and compares what's on screen pixel for pixel. After editing the icon in Icon Composer, run `swift scripts/make-icon.swift` to update `Assets/Bristle-Liquid.png` and `Assets/Bristle.icns`.
 
 ## Using the canvas in another app
 
-The canvas is the `BristleCanvas` library in this package, separate from the Bristle app, and the drawing model, file format, and rendering are in `BristleCore`. `CanvasView` provides every tool, selection, text editing, the clipboard, drag and drop, zoom, and VoiceOver support. The app adds documents, the toolbar, the bars at the bottom of the window, the Palette, and Settings around it.
+The canvas is the `BristleCanvas` library in this package, separate from the app. The drawing model, file format, and rendering live in `BristleCore`. `CanvasView` handles every tool, selection, text editing, the clipboard, drag and drop, zoom, and VoiceOver. The app adds documents, the toolbar, the bars, the Palette, and Settings.
 
 ```swift
 import BristleCanvas
@@ -98,8 +96,8 @@ canvas.tool = .pen
 window.contentView = canvas.scrollView
 ```
 
-Every change goes through `Drawing`, so it can be undone, and posts `drawingDidChange`. `SceneFile` reads and writes `.bristle` JSON, and `EmbeddedScene` reads and writes PNGs that carry a drawing.
+Every change goes through `Drawing`, so it can be undone, and posts `drawingDidChange`. `SceneFile` reads and writes `.bristle` files, and `EmbeddedScene` reads and writes PNGs that carry a drawing.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

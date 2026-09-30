@@ -49,7 +49,11 @@ public final class CanvasView: NSView {
     didSet {
       guard configuration != oldValue else { return }
       needsDisplay = true
-      if configuration.showsRulers != oldValue.showsRulers { updateRulers() }
+      if configuration.showsRulers != oldValue.showsRulers {
+        updateRulers()
+        // The rulers take room from the canvas.
+        updateCanvasSize()
+      }
     }
   }
 
@@ -151,6 +155,10 @@ public final class CanvasView: NSView {
   /// While the app's checks run, every part of the view asked to be redrawn, so they can tell
   /// whether redrawing just those parts gives the same picture as redrawing everything.
   var invalidated: [CGRect]?
+  /// How many taps the trackpad has been asked for, for the app's checks.
+  var hapticTaps = 0
+  /// Where the pointer is followed, for the size ring and the cursor.
+  var pointerArea: NSTrackingArea?
 
   public init(drawing: Drawing) {
     self.drawing = drawing
@@ -167,7 +175,9 @@ public final class CanvasView: NSView {
     scroll.allowsMagnification = true
     scroll.minMagnification = 0.1
     scroll.maxMagnification = 16
-    scroll.drawsBackground = false
+    // Beyond the view, under the toolbar and the bars, the desk continues.
+    scroll.drawsBackground = true
+    scroll.backgroundColor = Self.deskNSColor
     scroll.usesPredominantAxisScrolling = false
     scroll.contentView.postsBoundsChangedNotifications = true
     scroll.postsFrameChangedNotifications = true
@@ -218,18 +228,57 @@ public final class CanvasView: NSView {
 
   // MARK: Size
 
-  /// Room around the canvas, in canvas points, so its edges and handles can be scrolled clear
-  /// of the window's edges.
+  /// Room around the canvas, in canvas points, once it's zoomed in well past the view, so its
+  /// edges and handles can be scrolled clear of the window's edges.
   static let deskMargin: CGFloat = 64
+  /// Room kept around the canvas on screen for its handles and shadow, in points.
+  static let handleRoom: CGFloat = 16
 
-  /// Sizes the view to the canvas and the desk around it. While the canvas's edge is dragged it
-  /// only grows, so nothing shifts under the pointer.
-  func updateCanvasSize() {
-    var rect = scene.canvas.insetBy(dx: -Self.deskMargin, dy: -Self.deskMargin).integral
+  /// Whether the view is being resized to suit the canvas, so the changes that makes are let be.
+  private var adjusting = false
+
+  /// Sizes the view to the canvas and the room the window leaves for it. Along a side where
+  /// the whole canvas fits, the view is exactly that room, with the canvas in its middle, so
+  /// there's nothing to scroll, as in Preview. Where it doesn't fit, the view reaches past the
+  /// canvas by a margin that grows from nothing as it's zoomed further in, so scrolling starts
+  /// gently and the edges can be brought clear of the toolbar and bars. While the canvas's edge
+  /// is dragged, the view only grows, so nothing shifts under the pointer.
+  public func updateCanvasSize() {
+    guard !adjusting else { return }
+    let page = scene.canvas
+    let clip = scrollView.contentView
+    let scale = magnification
+    let insets = clip.contentInsets
+    let room = CGSize(
+      width: clip.frame.width / scale - insets.left - insets.right, height: clip.frame.height / scale - insets.top - insets.bottom)
+    let pad = Self.handleRoom / scale
+    // On whole pixels, so the canvas's edges stay sharp.
+    func pixels(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }
+    func span(_ low: CGFloat, _ length: CGFloat, _ room: CGFloat) -> (origin: CGFloat, length: CGFloat) {
+      guard room > 1 else { return (low - Self.deskMargin, length + Self.deskMargin * 2) }
+      if length + pad * 2 <= room {
+        // Exactly the room, so there's nothing to scroll and the canvas is in its middle.
+        return (low - pixels((room - length) / 2), room)
+      }
+      let margin = pixels(pad + min(Self.deskMargin, length + pad * 2 - room))
+      return (low - margin, length + margin * 2)
+    }
+    let across = span(page.minX, page.width, room.width), down = span(page.minY, page.height, room.height)
+    // Where it fits, it doesn't bounce either: there's nothing there to scroll to.
+    let fitsAcross = page.width + pad * 2 <= room.width, fitsDown = page.height + pad * 2 <= room.height
+    scrollView.horizontalScrollElasticity = fitsAcross ? .none : .automatic
+    scrollView.verticalScrollElasticity = fitsDown ? .none : .automatic
+    var rect = CGRect(x: across.origin, y: down.origin, width: across.length, height: down.length)
     if case .canvasResizing = interaction { rect = rect.union(bounds) }
-    guard rect != bounds else { return }
+    guard abs(rect.minX - bounds.minX) + abs(rect.minY - bounds.minY) + abs(rect.width - bounds.width) + abs(rect.height - bounds.height) > 0.01
+    else { return }
+    // What's in the middle of the view stays there.
+    let middle = unobscuredRect.center
+    adjusting = true
     setFrameSize(rect.size)
     setBoundsOrigin(rect.origin)
+    center(on: middle)
+    adjusting = false
     if configuration.showsRulers { updateRulers() }
     // AppKit leaves a subview's layer where it was when the bounds origin moves, so the text
     // being typed is put back over its element.
@@ -246,7 +295,21 @@ public final class CanvasView: NSView {
   private var lastVisibleSize = CGSize.zero
   private var lastMagnification: CGFloat = 0
 
+  /// A tap on a Force Touch trackpad, as Keynote and Freeform give when something snaps into
+  /// place. Trackpads without it, and mice, feel nothing.
+  func feelAlignment() {
+    hapticTaps += 1
+    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+  }
+
   @objc private func visibleDidChange() {
+    guard !adjusting else { return }
+    // Pinching past 100% is felt, so actual size is easy to find.
+    if lastMagnification > 0, (lastMagnification - 1) * (magnification - 1) < 0 || (magnification == 1 && lastMagnification != 1) {
+      feelAlignment()
+    }
+    // Zooming or resizing changes the room the canvas has.
+    updateCanvasSize()
     let visible = unobscuredRect
     // AppKit resizes the clip view before saying the scroll view changed size, so a change of
     // size at the same zoom is the view resizing: it stays centred where it was, rather than
@@ -266,6 +329,7 @@ public final class CanvasView: NSView {
   }
 
   @objc private func viewSizeDidChange() {
+    updateCanvasSize()
     guard let viewCenter else { return }
     resizing = true
     center(on: viewCenter)
@@ -326,6 +390,11 @@ public final class CanvasView: NSView {
   var deskColor: CGColor {
     effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
       ? CGColor(srgbRed: 0.11, green: 0.11, blue: 0.118, alpha: 1) : CGColor(srgbRed: 0.886, green: 0.89, blue: 0.906, alpha: 1)
+  }
+
+  static let deskNSColor = NSColor(name: "BristleDesk") { appearance in
+    appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+      ? NSColor(srgbRed: 0.11, green: 0.11, blue: 0.118, alpha: 1) : NSColor(srgbRed: 0.886, green: 0.89, blue: 0.906, alpha: 1)
   }
 
   /// Whether the canvas's own colour is dark, so the grid and marks over it are drawn light.
@@ -561,7 +630,9 @@ public final class CanvasView: NSView {
   }
 
   /// The zoom steps used by Zoom In and Zoom Out.
-  public static let zoomSteps: [CGFloat] = [0.05, 0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32]
+  public static let zoomSteps: [CGFloat] = [
+    0.1, 0.15, 0.2, 0.25, 0.33, 0.4, 0.5, 0.6, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 16,
+  ]
 
   @objc public func zoomIn(_ sender: Any?) {
     zoom(to: Self.zoomSteps.first { $0 > magnification + 0.001 } ?? scrollView.maxMagnification)
@@ -589,10 +660,11 @@ public final class CanvasView: NSView {
   /// and the margins kept around it.
   var roomToFit: CGSize {
     let clip = scrollView.contentView
-    let insets = overlaidInsets
+    let insets = clip.contentInsets
+    let scale = magnification
     return CGSize(
-      width: clip.frame.width - insets.left - insets.right - fitInsets.left - fitInsets.right,
-      height: clip.frame.height - insets.top - insets.bottom - fitInsets.top - fitInsets.bottom)
+      width: clip.frame.width - (insets.left + insets.right) * scale - fitInsets.left - fitInsets.right,
+      height: clip.frame.height - (insets.top + insets.bottom) * scale - fitInsets.top - fitInsets.bottom)
   }
 
   /// The zoom Zoom to Fit gives.
@@ -627,26 +699,15 @@ public final class CanvasView: NSView {
 
   /// The part of the view that nothing is laid over, such as the toolbar, in the canvas's
   /// coordinates.
-  /// What's laid over the view, in points on screen: the scroll view's insets, for the toolbar
-  /// and bars, and the rulers, which lie over the canvas below the toolbar.
-  var overlaidInsets: NSEdgeInsets {
-    var insets = scrollView.contentInsets
-    if scrollView.rulersVisible {
-      insets.top += scrollView.horizontalRulerView?.requiredThickness ?? 0
-      insets.left += scrollView.verticalRulerView?.requiredThickness ?? 0
-    }
-    return insets
-  }
-
   public var unobscuredRect: CGRect {
     let clip = scrollView.contentView
-    let insets = overlaidInsets
-    let scale = magnification
+    // The clip view's insets are in its own coordinates, which zoom with the canvas.
+    let insets = clip.contentInsets
     var rect = clip.bounds
-    rect.origin.x += insets.left / scale
-    rect.origin.y += insets.top / scale
-    rect.size.width -= (insets.left + insets.right) / scale
-    rect.size.height -= (insets.top + insets.bottom) / scale
+    rect.origin.x += insets.left
+    rect.origin.y += insets.top
+    rect.size.width -= insets.left + insets.right
+    rect.size.height -= insets.top + insets.bottom
     return convert(rect, from: clip)
   }
 
@@ -670,11 +731,12 @@ public final class CanvasView: NSView {
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(
-      NSTrackingArea(
-        rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect],
-        owner: self))
+    if let pointerArea { removeTrackingArea(pointerArea) }
+    let area = NSTrackingArea(
+      rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect],
+      owner: self)
+    addTrackingArea(area)
+    pointerArea = area
   }
 }
 
@@ -685,37 +747,22 @@ extension CGColor {
 /// Keeps the canvas in the middle of the view when it's smaller than the view, and lets its
 /// edges scroll clear of what's laid over the view, such as the toolbar and the bars.
 final class CanvasClipView: NSClipView {
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    // Only the scroll view's own insets, for the toolbar and the bars, not the window's.
-    automaticallyAdjustsContentInsets = false
-  }
-
-  required init?(coder: NSCoder) { fatalError() }
-
-  /// What's laid over the view, in points on screen.
-  var overlaid: NSEdgeInsets { (documentView as? CanvasView)?.overlaidInsets ?? NSEdgeInsets() }
-
+  /// AppKit keeps the clip view's insets, in its own coordinates, for everything laid over the
+  /// canvas: the toolbar, the rulers, and the bars at the bottom, which the scroll view is told
+  /// of. Scrolling stays AppKit's own, so it's as smooth and responsive as anywhere else; this
+  /// only centres the canvas when all of it fits in the space left clear.
   override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
     var rect = super.constrainBoundsRect(proposedBounds)
     guard let document = documentView, rect.width > 0, rect.height > 0 else { return rect }
     let doc = document.frame
     let scale = frame.width / rect.width
-    let insets = overlaid
-    let left = insets.left / scale, right = insets.right / scale, top = insets.top / scale, bottom = insets.bottom / scale
-    let width = rect.width - left - right, height = rect.height - top - bottom
-    // Centred when it fits the space left clear; otherwise scrolled no further than its edges
-    // reaching that space's edges.
-    // The page is centred whenever it fits, even when the desk around it doesn't.
-    let desk = CanvasView.deskMargin
-    func place(_ proposed: CGFloat, _ low: CGFloat, _ high: CGFloat, _ room: CGFloat, before: CGFloat, after: CGFloat) -> CGFloat {
-      if high - low - desk * 2 <= room { return (low + high) / 2 - room / 2 - before }
-      return min(max(proposed, low - before), high + after - (room + before + after))
-    }
-    let x = place(proposedBounds.minX, doc.minX, doc.maxX, width, before: left, after: right)
-    let y = place(proposedBounds.minY, doc.minY, doc.maxY, height, before: top, after: bottom)
-    // On whole pixels, so the canvas's edges stay sharp.
-    rect.origin = CGPoint(x: (x * scale).rounded() / scale, y: (y * scale).rounded() / scale)
+    let insets = contentInsets
+    let width = rect.width - insets.left - insets.right, height = rect.height - insets.top - insets.bottom
+    // On whole pixels, so the canvas's edges stay sharp. AppKit can round the view out by a
+    // fraction of a pixel, which mustn't leave anything to scroll.
+    let pixel = 1 / scale
+    if doc.width <= width + pixel { rect.origin.x = ((doc.midX - width / 2 - insets.left) * scale).rounded() / scale }
+    if doc.height <= height + pixel { rect.origin.y = ((doc.midY - height / 2 - insets.top) * scale).rounded() / scale }
     return rect
   }
 }
@@ -724,6 +771,14 @@ final class CanvasClipView: NSClipView {
 /// handled here rather than by the canvas, since a document view that handles the scroll wheel
 /// itself loses AppKit's responsive scrolling, which pans a large drawing smoothly.
 final class CanvasScrollView: NSScrollView {
+  /// Scroll bars always float over the canvas, as in Maps and Freeform, even with a mouse
+  /// plugged in. Bars that take room change the room the canvas has as they come and go, which
+  /// would nudge the canvas around.
+  override var scrollerStyle: NSScroller.Style {
+    get { .overlay }
+    set { super.scrollerStyle = .overlay }
+  }
+
   override func scrollWheel(with event: NSEvent) {
     if event.modifierFlags.contains(.command), let canvas = documentView as? CanvasView,
       event.phase != .ended || event.scrollingDeltaY != 0

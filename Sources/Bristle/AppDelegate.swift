@@ -176,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let item = add(tools, tool.title, #selector(Editor.chooseTool(_:)))
       item.representedObject = tool.rawValue
       item.image = NSImage(systemSymbolName: tool.symbol, accessibilityDescription: nil)
-      item.toolTip = tool.key.isEmpty ? nil : "Press \(tool.key.uppercased()) on the canvas"
+      item.attributedTitle = Controls.menuTitle(tool.title, key: tool.key)
       if [.select, .pixel, .strokeEraser, .arrow, .polygon, .text, .fill].contains(tool) { tools.addItem(.separator()) }
     }
     view.addItem(.separator())

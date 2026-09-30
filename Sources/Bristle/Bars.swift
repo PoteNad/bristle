@@ -153,10 +153,16 @@ final class BarButton: NSButton {
     return NSSize(width: max(40, super.intrinsicContentSize.width + 18), height: 32)
   }
 
+  /// The area that shades the button under the pointer. It's the only one replaced: AppKit
+  /// keeps areas of its own on the button, such as the one that shows its tooltip.
+  private var hoverArea: NSTrackingArea?
+
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+    if let hoverArea { removeTrackingArea(hoverArea) }
+    let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self)
+    addTrackingArea(area)
+    hoverArea = area
   }
 
   override func mouseEntered(with event: NSEvent) { hovering = true }
@@ -220,6 +226,7 @@ final class BarSwatch: NSButton {
 /// Shows a menu above a bar button, inside the window, as Freeform's bar menus open.
 @MainActor
 func popUpAbove(_ menu: NSMenu, from view: NSView) {
+  menu.appearance = view.window?.effectiveAppearance
   let height = menu.size.height
   let y = view.isFlipped ? -height - 6 : view.bounds.height + height + 6
   menu.popUp(positioning: nil, at: NSPoint(x: 0, y: y), in: view)
@@ -248,6 +255,8 @@ func popoverAbove(_ content: NSView, from view: NSView, edge: NSRectEdge = .maxY
   popover.contentViewController = controller
   popover.behavior = .transient
   popover.animates = !AppPreferences.isAutomatedCheck
+  // It follows the window, not the bar it opens from, which takes the canvas's lightness.
+  popover.appearance = view.window?.effectiveAppearance
   // Above the view unless asked otherwise, whichever way up it is.
   let above = edge == .maxY
   popover.show(relativeTo: view.bounds, of: view, preferredEdge: view.isFlipped == above ? .minY : .maxY)
@@ -636,7 +645,7 @@ final class StyleBar: NSObject {
       item.image = NSImage(systemSymbolName: brush.symbol, accessibilityDescription: nil)
       item.state = brush == chosen ? .on : .off
       item.representedObject = brush.rawValue
-      if !brush.key.isEmpty { item.toolTip = "Press \(brush.key.uppercased()) on the canvas" }
+      item.attributedTitle = Controls.menuTitle(brush.title, key: brush.key)
     }
     MenuRelay { [weak self, weak canvas, weak c] item in
       guard let canvas, let c, let brush = (item.representedObject as? String).flatMap(Tool.init(rawValue:)) else { return }

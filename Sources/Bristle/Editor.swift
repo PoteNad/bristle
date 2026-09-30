@@ -76,6 +76,7 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     root.didLayout = { [weak self] in
       guard let self else { return }
       self.window?.invalidateCursorRects(for: self.canvas)
+      self.updateBarAppearance()
     }
     root.autoHides = UserDefaults.standard.bool(forKey: PreferenceKey.barsAutoHide) && !isAutomatedCheck
     let controller = NSViewController()
@@ -100,6 +101,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     center.addObserver(self, selector: #selector(stylesChangedElsewhere), name: .toolStylesDidChange, object: nil)
     center.addObserver(self, selector: #selector(drawingChanged), name: .drawingDidChange, object: document.drawing)
     center.addObserver(self, selector: #selector(drawingChanged), name: .drawingSelectionDidChange, object: document.drawing)
+    // Scrolling moves the page under the bars.
+    center.addObserver(self, selector: #selector(viewMoved), name: NSView.boundsDidChangeNotification, object: canvas.scrollView.contentView)
     window.makeFirstResponder(canvas)
   }
 
@@ -181,7 +184,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     updateBars()
   }
 
-  func canvasViewZoomDidChange(_ canvas: CanvasView) { zoomBar.update() }
+  func canvasViewZoomDidChange(_ canvas: CanvasView) {
+    zoomBar.update()
+    updateBarAppearance()
+  }
 
   func canvasView(_ canvas: CanvasView, didPick color: Color) {
     palette.update()
@@ -222,6 +228,8 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     styleBar.suppressed = paletteVisible && UserDefaults.standard.bool(forKey: PreferenceKey.barHidesWithPalette)
   }
 
+  @objc private func viewMoved() { updateBarAppearance() }
+
   private var paletteScheduled = false
 
   /// The Palette follows the drawing, at most once per turn of the run loop.
@@ -231,13 +239,32 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
     DispatchQueue.main.async { [weak self] in
       MainActor.assumeIsolated {
         self?.paletteScheduled = false
+        self?.updateBarAppearance()
         self?.palette.update()
         self?.styleBar.update()
       }
     }
   }
 
+  /// The bars float over the canvas, so each takes the lightness of what's under it: the page's
+  /// own colour, light even in dark mode for a white page, or the window's around it, so their
+  /// symbols always stand out.
+  func updateBarAppearance() {
+    guard let window else { return }
+    let page = canvas.convert(canvas.scene.canvas, to: nil)
+    let light = canvas.scene.paper.background.map { 0.299 * $0.red + 0.587 * $0.green + 0.114 * $0.blue >= 0.5 || $0.alpha < 0.5 } ?? true
+    for bar in [zoomBar.bar, styleBar.bar] where bar.window != nil {
+      let frame = bar.convert(bar.bounds, to: nil)
+      let over = frame.intersection(page)
+      let onPage = !over.isNull && over.width * over.height > frame.width * frame.height / 2
+      let appearance = onPage ? NSAppearance(named: light ? .aqua : .darkAqua) : nil
+      if bar.appearance?.name != appearance?.name { bar.appearance = appearance }
+      _ = window
+    }
+  }
+
   private func updateBars() {
+    updateBarAppearance()
     updateStyleBarPlace()
     palette.update()
     styleBar.update()
@@ -662,11 +689,16 @@ final class EditorView: NSView {
 
   private var bars: [NSView] { [zoom, style].compactMap { $0 } }
 
+  private var nearArea: NSTrackingArea?
+
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
+    if let nearArea { removeTrackingArea(nearArea) }
+    nearArea = nil
     guard autoHides else { return }
-    addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+    addTrackingArea(area)
+    nearArea = area
   }
 
   override func mouseMoved(with event: NSEvent) {
@@ -726,6 +758,7 @@ final class EditorView: NSView {
       if scroll.automaticallyAdjustsContentInsets { scroll.automaticallyAdjustsContentInsets = false }
       if scroll.contentInsets.top != insets.top || scroll.contentInsets.bottom != insets.bottom || scroll.contentInsets.left != insets.left {
         scroll.contentInsets = insets
+        (scroll.documentView as? CanvasView)?.updateCanvasSize()
         // The canvas moves to suit the new room, centred if it fits.
         let clip = scroll.contentView
         clip.scroll(to: clip.constrainBoundsRect(clip.bounds).origin)
