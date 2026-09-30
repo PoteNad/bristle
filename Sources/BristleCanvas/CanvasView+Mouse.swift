@@ -247,7 +247,11 @@ extension CanvasView {
       if draft.isLinear {
         let previous = bindingTarget
         bindingTarget = scene.binding(at: p, excluding: draft.id, tolerance: 4 / magnification)?.element
-        if previous != bindingTarget { needsDisplay = true }
+        if previous != bindingTarget {
+          needsDisplay = true
+          // The end catching onto a shape is felt, as a snap is.
+          if bindingTarget != nil { feelAlignment() }
+        }
       }
     case .polygon(var points):
       invalidatePolygon(points)
@@ -355,6 +359,9 @@ extension CanvasView {
     for guide in guides + new {
       setNeedsDisplay(CGRect(boundingPoints: [guide.from, guide.to]).insetBy(dx: -2, dy: -2))
     }
+    // A tap on the trackpad as something snaps into line, not while it slides along the line.
+    let lines = { (guides: [Snapping.Guide]) in Set(guides.map { $0.from.x == $0.to.x ? "x\($0.from.x)" : "y\($0.from.y)" }) }
+    if !lines(new).isSubset(of: lines(guides)) { feelAlignment() }
     guides = new
   }
 
@@ -519,6 +526,7 @@ extension CanvasView {
     let target = isEnd ? scene.binding(at: p, excluding: original.id, tolerance: 4 / magnification) : nil
     if bindingTarget != target?.element {
       bindingTarget = target?.element
+      if bindingTarget != nil { feelAlignment() }
       needsDisplay = true
     }
     drawing.live { scene in

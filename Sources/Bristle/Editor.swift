@@ -758,6 +758,7 @@ final class EditorView: NSView {
       if scroll.automaticallyAdjustsContentInsets { scroll.automaticallyAdjustsContentInsets = false }
       if scroll.contentInsets.top != insets.top || scroll.contentInsets.bottom != insets.bottom || scroll.contentInsets.left != insets.left {
         scroll.contentInsets = insets
+        (scroll.documentView as? CanvasView)?.updateCanvasSize()
         // The canvas moves to suit the new room, centred if it fits.
         let clip = scroll.contentView
         clip.scroll(to: clip.constrainBoundsRect(clip.bounds).origin)

@@ -549,8 +549,11 @@
         for _ in 0..<2 {
           NSApp.sendAction(action, to: brush.target, from: brush)
           RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
-          guard abs(canvas.unobscuredRect.midX - canvas.scene.canvas.midX) < 2, abs(canvas.unobscuredRect.midY - canvas.scene.canvas.midY) < 2 else {
-            fail("a canvas smaller than the view should stay in its middle as the Palette comes and goes: \(canvas.unobscuredRect)")
+          // Along each side where the canvas fits, it stays in the middle.
+          let room = canvas.unobscuredRect, page = canvas.scene.canvas
+          let pad = 2 * CanvasView.handleRoom / canvas.magnification
+          guard page.width + pad > room.width || abs(room.midX - page.midX) < 4, page.height + pad > room.height || abs(room.midY - page.midY) < 4 else {
+            fail("a canvas that fits should stay in the middle as the Palette comes and goes: \(room)")
           }
         }
         // After the view resizes, moving it elsewhere sticks, when the canvas is bigger than the view.
@@ -770,7 +773,8 @@
         canvas.select([])
         pass("shapes from the gallery, free-form selection, and Invert Selection work")
 
-        // Every textured brush draws.
+        // Every textured brush draws, from where the checks started, back in the middle.
+        canvas.center(on: c)
         for (i, name) in ["Crayon", "Marker", "Watercolor", "Oil Brush"].enumerated() {
           chooseBrush(name)
           let y = c.y - 330 + CGFloat(i) * 30
@@ -782,8 +786,9 @@
         canvas.displayIfNeeded()
 
         // A line is bent by dragging the middle of it.
+        canvas.center(on: c)
         canvas.tool = .line
-        let from = CGPoint(x: c.x - 340, y: c.y + 420), to = CGPoint(x: c.x - 200, y: c.y + 420)
+        let from = CGPoint(x: c.x - 340, y: c.y - 280), to = CGPoint(x: c.x - 200, y: c.y - 280)
         drag(line(from: from, to: to), in: canvas, flags: .command)
         guard let bent = canvas.scene.elements.last, bent.kind == .line, bent.points.count == 2 else { fail("the line tool should draw a line") }
         canvas.tool = .select

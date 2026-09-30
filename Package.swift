@@ -26,5 +26,5 @@ let package = Package(
       name: "Bristle", dependencies: ["BristleCore", "BristleCanvas"], exclude: checking ? [] : ["AppChecks.swift"],
       swiftSettings: checking ? [.define("BRISTLE_CHECKS")] : [], linkerSettings: linkApp),
     .testTarget(name: "BristleCoreTests", dependencies: ["BristleCore"]),
-    .testTarget(name: "BristleCanvasTests", dependencies: ["BristleCore", "BristleCanvas"]),
+    .testTarget(name: "BristleCanvasTests", dependencies: ["BristleCore", "BristleCanvas"], exclude: ["Fixtures"]),
   ])

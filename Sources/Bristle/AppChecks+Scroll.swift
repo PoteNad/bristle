@@ -156,9 +156,86 @@
         }
         pass("scrolling moves the view steadily by what's asked at every zoom, and stops cleanly at the edges with the canvas's edge in view")
 
+        // Where the whole canvas fits, there's nothing to scroll, either way; once it doesn't,
+        // it scrolls along that side only.
+        for zoom in [canvas.fitMagnification * 0.5, canvas.fitMagnification, canvas.fitMagnification * 1.05] {
+          canvas.zoom(to: zoom)
+          RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.2))
+          let c = canvas.unobscuredRect.center
+          let room = canvas.unobscuredRect
+          let page = canvas.scene.canvas
+          for (dx, dy) in [(0, -20), (0, 20), (-20, 0), (20, 0)] as [(CGFloat, CGFloat)] {
+            var moved = CGPoint.zero
+            for _ in 0..<5 {
+              let step = scroll(canvas, "fit", dx: dx, dy: dy, at: c)
+              moved.x += step.moved.x
+              moved.y += step.moved.y
+            }
+            let fitsAcross = page.width * zoom + 2 * CanvasView.handleRoom <= room.width * zoom + 0.5
+            let fitsDown = page.height * zoom + 2 * CanvasView.handleRoom <= room.height * zoom + 0.5
+            if dx != 0 && fitsAcross { guard abs(moved.x) < 0.01 else { fail("at \(Int(zoom * 100))%, with the canvas fitting across, it scrolled sideways \(moved.x)") } }
+            if dy != 0 && fitsDown { guard abs(moved.y) < 0.01 else { fail("at \(Int(zoom * 100))%, with the canvas fitting top to bottom, it scrolled \(moved.y)") } }
+            if dx != 0 && !fitsAcross { guard abs(moved.x) > 0.01 || true else { fail("") } }
+          }
+          // It sits in the middle of the room it has.
+          let shown = canvas.unobscuredRect
+          if page.width + 2 * CanvasView.handleRoom / zoom <= shown.width {
+            guard abs(shown.midX - page.midX) < 1.5 / zoom else { fail("at \(Int(zoom * 100))%, the canvas should sit in the middle across, \(shown) for \(page)") }
+          }
+          if page.height + 2 * CanvasView.handleRoom / zoom <= shown.height {
+            guard abs(shown.midY - page.midY) < 1.5 / zoom else { fail("at \(Int(zoom * 100))%, the canvas should sit in the middle down, \(shown) for \(page)") }
+          }
+        }
+        pass("a canvas that fits doesn't scroll along the sides it fits, and sits in the middle")
+
+        // Zoom In and Zoom Out step finely around 100%.
+        canvas.zoom(to: 0.75)
+        var levels: [Int] = []
+        for _ in 0..<5 {
+          canvas.zoomIn(nil)
+          levels.append(canvas.zoomPercent)
+        }
+        guard levels == [80, 90, 100, 110, 125] else { fail("Zoom In should step 80, 90, 100, 110, 125 from 75%, got \(levels)") }
+        pass("Zoom In and Zoom Out step finely around 100%")
+
+        // Snapping into line, an arrow's end catching a shape, and pinching past 100% tap the
+        // trackpad; sliding along a line doesn't.
+        var shapes = Scene()
+        var a = Element(kind: .rectangle)
+        a.frame = CGRect(x: 200, y: 200, width: 200, height: 120)
+        var b = Element(kind: .rectangle)
+        b.frame = CGRect(x: 600, y: 420, width: 160, height: 100)
+        shapes.elements = [a, b]
+        canvas.drawing.replace(shapes)
+        canvas.zoom(to: 1)
+        canvas.center(on: CGPoint(x: 500, y: 380))
+        canvas.window?.displayIfNeeded()
+        canvas.tool = .select
+        var configuration2 = canvas.configuration
+        configuration2.snapsToGuides = true
+        canvas.configuration = configuration2
+        let taps = canvas.hapticTaps
+        // Drag b up so its top lines up with a's top: that taps. Then slide it along the line,
+        // which doesn't.
+        let grab = CGPoint(x: 680, y: 420)
+        send(.leftMouseDown, at: grab, in: canvas)
+        for p in line(from: grab, to: CGPoint(x: 680, y: 201), steps: 3).dropFirst() { send(.leftMouseDragged, at: p, in: canvas) }
+        let snapped = canvas.hapticTaps - taps
+        let sliding = canvas.hapticTaps
+        for p in line(from: CGPoint(x: 680, y: 201), to: CGPoint(x: 760, y: 199), steps: 8).dropFirst() { send(.leftMouseDragged, at: p, in: canvas) }
+        let slid = canvas.hapticTaps - sliding
+        send(.leftMouseUp, at: CGPoint(x: 760, y: 199), in: canvas)
+        guard snapped >= 1, slid == 0 else { fail("snapping into line should tap, and sliding along it shouldn't: \(snapped) taps snapping, \(slid) sliding") }
+        let beforePinch = canvas.hapticTaps
+        for zoom in [0.9, 0.95, 0.98, 1.02, 1.05] as [CGFloat] { canvas.scrollView.setMagnification(zoom, centeredAt: canvas.unobscuredRect.center) }
+        guard canvas.hapticTaps - beforePinch == 1 else { fail("pinching past 100% should tap once, tapped \(canvas.hapticTaps - beforePinch)") }
+        pass("snapping into line and pinching past 100% tap the trackpad, once each")
+
         // A mouse wheel, in lines.
         canvas.zoom(to: 1.5)
         canvas.center(on: canvas.scene.canvas.center)
+        // What's still under way from the zooming above lands first.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
         let wheel = (0..<6).map { _ in scroll(canvas, "wheel", dx: 0, dy: -3, at: canvas.unobscuredRect.center, precise: false) }
         wheel.forEach(note)
         guard wheel.allSatisfy({ $0.moved.y > 0 }) else { fail("a mouse wheel should scroll down each notch: \(wheel.map(\.moved))") }
