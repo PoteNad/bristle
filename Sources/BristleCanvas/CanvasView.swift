@@ -257,8 +257,8 @@ public final class CanvasView: NSView {
     func span(_ low: CGFloat, _ length: CGFloat, _ room: CGFloat) -> (origin: CGFloat, length: CGFloat) {
       guard room > 1 else { return (low - Self.deskMargin, length + Self.deskMargin * 2) }
       if length + pad * 2 <= room {
-        let side = pixels((room - length) / 2)
-        return (low - side, pixels(room))
+        // Exactly the room, so there's nothing to scroll and the canvas is in its middle.
+        return (low - pixels((room - length) / 2), room)
       }
       let margin = pixels(pad + min(Self.deskMargin, length + pad * 2 - room))
       return (low - margin, length + margin * 2)
@@ -754,9 +754,11 @@ final class CanvasClipView: NSClipView {
     let scale = frame.width / rect.width
     let insets = contentInsets
     let width = rect.width - insets.left - insets.right, height = rect.height - insets.top - insets.bottom
-    // On whole pixels, so the canvas's edges stay sharp.
-    if doc.width <= width { rect.origin.x = ((doc.midX - width / 2 - insets.left) * scale).rounded() / scale }
-    if doc.height <= height { rect.origin.y = ((doc.midY - height / 2 - insets.top) * scale).rounded() / scale }
+    // On whole pixels, so the canvas's edges stay sharp. AppKit can round the view out by a
+    // fraction of a pixel, which mustn't leave anything to scroll.
+    let pixel = 1 / scale
+    if doc.width <= width + pixel { rect.origin.x = ((doc.midX - width / 2 - insets.left) * scale).rounded() / scale }
+    if doc.height <= height + pixel { rect.origin.y = ((doc.midY - height / 2 - insets.top) * scale).rounded() / scale }
     return rect
   }
 }
