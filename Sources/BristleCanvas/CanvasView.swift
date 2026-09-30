@@ -151,6 +151,8 @@ public final class CanvasView: NSView {
   /// While the app's checks run, every part of the view asked to be redrawn, so they can tell
   /// whether redrawing just those parts gives the same picture as redrawing everything.
   var invalidated: [CGRect]?
+  /// Where the pointer is followed, for the size ring and the cursor.
+  var pointerArea: NSTrackingArea?
 
   public init(drawing: Drawing) {
     self.drawing = drawing
@@ -589,10 +591,11 @@ public final class CanvasView: NSView {
   /// and the margins kept around it.
   var roomToFit: CGSize {
     let clip = scrollView.contentView
-    let insets = overlaidInsets
+    let insets = clip.contentInsets
+    let scale = magnification
     return CGSize(
-      width: clip.frame.width - insets.left - insets.right - fitInsets.left - fitInsets.right,
-      height: clip.frame.height - insets.top - insets.bottom - fitInsets.top - fitInsets.bottom)
+      width: clip.frame.width - (insets.left + insets.right) * scale - fitInsets.left - fitInsets.right,
+      height: clip.frame.height - (insets.top + insets.bottom) * scale - fitInsets.top - fitInsets.bottom)
   }
 
   /// The zoom Zoom to Fit gives.
@@ -627,26 +630,15 @@ public final class CanvasView: NSView {
 
   /// The part of the view that nothing is laid over, such as the toolbar, in the canvas's
   /// coordinates.
-  /// What's laid over the view, in points on screen: the scroll view's insets, for the toolbar
-  /// and bars, and the rulers, which lie over the canvas below the toolbar.
-  var overlaidInsets: NSEdgeInsets {
-    var insets = scrollView.contentInsets
-    if scrollView.rulersVisible {
-      insets.top += scrollView.horizontalRulerView?.requiredThickness ?? 0
-      insets.left += scrollView.verticalRulerView?.requiredThickness ?? 0
-    }
-    return insets
-  }
-
   public var unobscuredRect: CGRect {
     let clip = scrollView.contentView
-    let insets = overlaidInsets
-    let scale = magnification
+    // The clip view's insets are in its own coordinates, which zoom with the canvas.
+    let insets = clip.contentInsets
     var rect = clip.bounds
-    rect.origin.x += insets.left / scale
-    rect.origin.y += insets.top / scale
-    rect.size.width -= (insets.left + insets.right) / scale
-    rect.size.height -= (insets.top + insets.bottom) / scale
+    rect.origin.x += insets.left
+    rect.origin.y += insets.top
+    rect.size.width -= insets.left + insets.right
+    rect.size.height -= insets.top + insets.bottom
     return convert(rect, from: clip)
   }
 
@@ -670,11 +662,12 @@ public final class CanvasView: NSView {
 
   public override func viewDidMoveToWindow() {
     super.viewDidMoveToWindow()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(
-      NSTrackingArea(
-        rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect],
-        owner: self))
+    if let pointerArea { removeTrackingArea(pointerArea) }
+    let area = NSTrackingArea(
+      rect: .zero, options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .inVisibleRect],
+      owner: self)
+    addTrackingArea(area)
+    pointerArea = area
   }
 }
 
@@ -685,37 +678,20 @@ extension CGColor {
 /// Keeps the canvas in the middle of the view when it's smaller than the view, and lets its
 /// edges scroll clear of what's laid over the view, such as the toolbar and the bars.
 final class CanvasClipView: NSClipView {
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    // Only the scroll view's own insets, for the toolbar and the bars, not the window's.
-    automaticallyAdjustsContentInsets = false
-  }
-
-  required init?(coder: NSCoder) { fatalError() }
-
-  /// What's laid over the view, in points on screen.
-  var overlaid: NSEdgeInsets { (documentView as? CanvasView)?.overlaidInsets ?? NSEdgeInsets() }
-
+  /// AppKit keeps the clip view's insets, in its own coordinates, for everything laid over the
+  /// canvas: the toolbar, the rulers, and the bars at the bottom, which the scroll view is told
+  /// of. Scrolling stays AppKit's own, so it's as smooth and responsive as anywhere else; this
+  /// only centres the canvas when all of it fits in the space left clear.
   override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
     var rect = super.constrainBoundsRect(proposedBounds)
     guard let document = documentView, rect.width > 0, rect.height > 0 else { return rect }
     let doc = document.frame
     let scale = frame.width / rect.width
-    let insets = overlaid
-    let left = insets.left / scale, right = insets.right / scale, top = insets.top / scale, bottom = insets.bottom / scale
-    let width = rect.width - left - right, height = rect.height - top - bottom
-    // Centred when it fits the space left clear; otherwise scrolled no further than its edges
-    // reaching that space's edges.
-    // The page is centred whenever it fits, even when the desk around it doesn't.
-    let desk = CanvasView.deskMargin
-    func place(_ proposed: CGFloat, _ low: CGFloat, _ high: CGFloat, _ room: CGFloat, before: CGFloat, after: CGFloat) -> CGFloat {
-      if high - low - desk * 2 <= room { return (low + high) / 2 - room / 2 - before }
-      return min(max(proposed, low - before), high + after - (room + before + after))
-    }
-    let x = place(proposedBounds.minX, doc.minX, doc.maxX, width, before: left, after: right)
-    let y = place(proposedBounds.minY, doc.minY, doc.maxY, height, before: top, after: bottom)
+    let insets = contentInsets
+    let width = rect.width - insets.left - insets.right, height = rect.height - insets.top - insets.bottom
     // On whole pixels, so the canvas's edges stay sharp.
-    rect.origin = CGPoint(x: (x * scale).rounded() / scale, y: (y * scale).rounded() / scale)
+    if doc.width <= width { rect.origin.x = ((doc.midX - width / 2 - insets.left) * scale).rounded() / scale }
+    if doc.height <= height { rect.origin.y = ((doc.midY - height / 2 - insets.top) * scale).rounded() / scale }
     return rect
   }
 }

@@ -38,6 +38,8 @@ BRISTLE_CLICK_CHECK=1 "$APP" $IGNORE_STATE
 # shellcheck disable=SC2086
 BRISTLE_TOUR_CHECK=1 "$APP" $IGNORE_STATE
 # shellcheck disable=SC2086
+BRISTLE_SCROLL_CHECK=1 "$APP" $IGNORE_STATE
+# shellcheck disable=SC2086
 BRISTLE_PERF_CHECK=1 "$APP" $IGNORE_STATE
 
 # Restoring after quitting runs in a copy of the app with an identifier of its own for this run,

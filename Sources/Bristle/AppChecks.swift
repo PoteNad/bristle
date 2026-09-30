@@ -19,7 +19,7 @@
       [
         "BRISTLE_LAUNCH_CHECK", "BRISTLE_SAVE_CHECK", "BRISTLE_OPEN_CHECK", "BRISTLE_ROUNDTRIP_CHECK",
         "BRISTLE_STALE_CHECK", "BRISTLE_SESSION_PREPARE", "BRISTLE_SESSION_VERIFY", "BRISTLE_CLICK_CHECK",
-        "BRISTLE_PERF_CHECK", "BRISTLE_SNAPSHOT", "BRISTLE_TOUR_CHECK",
+        "BRISTLE_PERF_CHECK", "BRISTLE_SNAPSHOT", "BRISTLE_TOUR_CHECK", "BRISTLE_SCROLL_CHECK",
       ].contains { environment[$0] != nil }
     }
 
@@ -76,6 +76,7 @@
       if environment["BRISTLE_CLICK_CHECK"] == "1" { clickCheck(controller) }
       if environment["BRISTLE_PERF_CHECK"] == "1" { performanceCheck(controller) }
       if environment["BRISTLE_TOUR_CHECK"] == "1" { tourCheck(controller) }
+      if environment["BRISTLE_SCROLL_CHECK"] == "1" { scrollCheck(controller) }
       if let path = environment["BRISTLE_SNAPSHOT"] { snapshot(path, controller) }
     }
 
@@ -502,13 +503,13 @@
         // The bar's brush menu lists every brush and chooses one.
         @MainActor func chooseBrush(_ title: String) {
           let menu = editor.styleBar.brushMenu()
-          guard let index = menu.items.firstIndex(where: { $0.title == title }) else {
+          guard let index = menu.items.firstIndex(where: { $0.title.components(separatedBy: "\t")[0] == title }) else {
             fail("the brush menu should offer \(title): \(menu.items.map(\.title))")
           }
           menu.performActionForItem(at: index)
           editor.window?.contentView?.layoutSubtreeIfNeeded()
         }
-        guard editor.styleBar.brushMenu().items.map(\.title) == Controls.brushes.map(\.title) else {
+        guard editor.styleBar.brushMenu().items.map({ $0.title.components(separatedBy: "\t")[0] }) == Controls.brushes.map(\.title) else {
           fail("the brush menu should list every brush")
         }
         chooseBrush("Pencil")
