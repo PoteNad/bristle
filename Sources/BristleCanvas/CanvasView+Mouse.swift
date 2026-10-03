@@ -597,6 +597,7 @@ extension CanvasView {
         needsDisplay = true
         return
       }
+      guard showsOnCanvas(draft) else { return }
       if draft.isLinear {
         draft.endBinding = scene.binding(at: p, excluding: draft.id, tolerance: 4 / magnification)
         draft.bendIfStraight()
@@ -653,6 +654,10 @@ extension CanvasView {
     }
   }
 
+  /// Whether an element would show at all. The drawing is clipped to the canvas, so something
+  /// drawn wholly on the desk around it is left out rather than kept as an invisible edit.
+  func showsOnCanvas(_ element: Element) -> Bool { element.bounds.intersects(scene.canvas) }
+
   /// Adds a new element, selecting it or keeping the tool, as Settings choose.
   func add(_ element: Element, name: String) {
     drawing.edit(name, select: configuration.returnsToSelect ? [element.id] : drawing.selection) { scene in
@@ -671,6 +676,7 @@ extension CanvasView {
       stroke.brush = .pixel
       stroke.setWorldPoints(Freehand.pixels(raw, size: width))
       setNeedsDisplay(stroke.bounds.insetBy(dx: -width * 2, dy: -width * 2))
+      guard showsOnCanvas(stroke) else { return }
       drawing.edit("Draw") { $0.elements.append(stroke) }
       return
     }
@@ -684,6 +690,7 @@ extension CanvasView {
     stroke.setWorldPoints(points)
     stroke.pressures = brush.usesPressure ? kept : []
     setNeedsDisplay(stroke.bounds.insetBy(dx: -width * 2, dy: -width * 2))
+    guard showsOnCanvas(stroke) else { return }
     drawing.edit("Draw") { $0.elements.append(stroke) }
   }
 
@@ -722,6 +729,7 @@ extension CanvasView {
     var polygon = Element(kind: .polygon)
     styles[.polygon, default: Tool.polygon.defaultStyle].apply(to: &polygon)
     polygon.setWorldPoints(corners)
+    guard showsOnCanvas(polygon) else { return }
     add(polygon, name: "Add Polygon")
   }
 
