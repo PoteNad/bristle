@@ -492,7 +492,7 @@ public final class CanvasView: NSView {
   }
 
   /// Grey and white squares, for a transparent canvas.
-  nonisolated(unsafe) static let checkerboard: CGImage = {
+  static let checkerboard: CGImage = {
     let context = CGContext(
       data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 0,
       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
