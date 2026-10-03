@@ -194,7 +194,7 @@ public enum Renderer {
   }
 
   /// Speckles of paper for crayon, the same every time.
-  nonisolated(unsafe) static let grain: CGImage = {
+  static let grain: CGImage = {
     let side = 48
     let context = CGContext(
       data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,

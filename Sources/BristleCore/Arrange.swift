@@ -115,7 +115,7 @@ extension Scene {
     units.sort { horizontal ? $0.bounds.midX < $1.bounds.midX : $0.bounds.midY < $1.bounds.midY }
     var extent = units.map(\.bounds).reduce(CGRect.null) { $0.union($1) }
     let onCanvas = extent.intersection(canvas)
-    if !onCanvas.isNull, size(onCanvas) >= units.map { size($0.bounds) }.max() ?? 0 { extent = onCanvas }
+    if !onCanvas.isNull, size(onCanvas) >= units.map({ size($0.bounds) }).max() ?? 0 { extent = onCanvas }
     let start = low(extent), span = size(extent)
     let occupied = units.reduce(0) { $0 + size($1.bounds) }
     var places: [CGFloat] = []

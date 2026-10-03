@@ -10,7 +10,7 @@
     // MARK: Pictures
 
     /// A bitmap of what the canvas shows, one pixel per point on screen.
-    final class Picture {
+    @MainActor final class Picture {
       let rep: NSBitmapImageRep
       let visible: CGRect
       let scale: CGFloat
