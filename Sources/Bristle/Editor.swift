@@ -108,6 +108,10 @@ final class Editor: NSWindowController, NSMenuItemValidation, NSWindowDelegate, 
 
   required init?(coder: NSCoder) { fatalError() }
 
+  override func windowTitle(forDocumentDisplayName displayName: String) -> String {
+    (displayName as NSString).deletingPathExtension
+  }
+
   override func showWindow(_ sender: Any?) {
     super.showWindow(sender)
     showDrawingOnce()

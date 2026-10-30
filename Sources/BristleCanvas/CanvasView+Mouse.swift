@@ -239,6 +239,7 @@ extension CanvasView {
       let tail = CGRect(boundingPoints: Array(points.suffix(12))).insetBy(dx: -width - 3, dy: -width - 3)
       setNeedsDisplay(tail.union(dirty))
       interaction = .freehand(points: points, pressures: pressures, tablet: tablet, dirty: tail)
+      return
     case .shape(let start, var draft):
       invalidate(draft)
       shape(&draft, from: start, to: snapped(p, event: event), event: event)
@@ -306,6 +307,7 @@ extension CanvasView {
       path.append(p)
       interaction = .erasing(path: path, strokes: strokes)
       erase(to: p)
+      return
     case .textBox(let start, let current):
       setNeedsDisplay(CGRect(boundingPoints: [start, current]).insetBy(dx: -2, dy: -2))
       interaction = .textBox(start: start, current: p)

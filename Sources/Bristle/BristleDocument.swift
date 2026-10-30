@@ -4,7 +4,7 @@ import BristleCore
 import UniformTypeIdentifiers
 
 extension UTType {
-  static let bristle = UTType(exportedAs: "io.github.PoteNad.bristle.drawing", conformingTo: .json)
+  static let bristle = UTType(exportedAs: "io.github.potenad.bristle.document", conformingTo: .data)
 }
 
 @objc(BristleDocument)

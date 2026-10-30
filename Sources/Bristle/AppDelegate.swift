@@ -241,7 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     NSApp.orderFrontStandardAboutPanel(options: [
       .version: "",
       .credits: NSAttributedString(
-        string: "A small, native macOS drawing app.",
+        string: "A small, native drawing app.",
         attributes: [
           .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
           .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: centered,

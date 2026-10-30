@@ -25,6 +25,7 @@ fi
 cp Assets/Bristle.icns "$APP/Contents/Resources/Bristle.icns"
 cp LICENSE "$APP/Contents/Resources/LICENSE"
 cp Info.plist "$APP/Contents/Info.plist"
+scripts/build-quick-look.sh "$APP" "$(uname -m)"
 if [ -n "${BRISTLE_VERSION:-}" ]; then
   plutil -replace CFBundleShortVersionString -string "$BRISTLE_VERSION" "$APP/Contents/Info.plist"
 fi

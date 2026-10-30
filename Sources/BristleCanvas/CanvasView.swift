@@ -76,6 +76,7 @@ public final class CanvasView: NSView {
   public var tool: Tool = .pencil {
     didSet {
       guard tool != oldValue else { return }
+      if tool.usesColor { lastColorTool = tool }
       if tool != .eyedropper { toolBeforeEyedropper = nil } else if toolBeforeEyedropper == nil {
         toolBeforeEyedropper = oldValue
         selectionBeforeEyedropper = drawing.selection
@@ -97,6 +98,9 @@ public final class CanvasView: NSView {
   }
   var toolBeforeEyedropper: Tool?
   var selectionBeforeEyedropper: Set<String>?
+  /// The colour-using tool most recently chosen, for an eyedropper used after an eraser or
+  /// Select. Picking a colour should never leave it stranded on a colourless tool.
+  var lastColorTool: Tool = .pen
 
   /// The style each tool gives new elements.
   public var styles: [Tool: Style] = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0, $0.defaultStyle) }) {
@@ -190,7 +194,9 @@ public final class CanvasView: NSView {
     center.addObserver(
       self, selector: #selector(selectionDidChange), name: .drawingSelectionDidChange, object: drawing)
     center.addObserver(
-      self, selector: #selector(zoomDidChange), name: NSScrollView.didEndLiveMagnifyNotification, object: scroll)
+      self, selector: #selector(liveMagnifyDidStart), name: NSScrollView.willStartLiveMagnifyNotification, object: scroll)
+    center.addObserver(
+      self, selector: #selector(liveMagnifyDidEnd), name: NSScrollView.didEndLiveMagnifyNotification, object: scroll)
     center.addObserver(
       self, selector: #selector(visibleDidChange), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
     center.addObserver(self, selector: #selector(viewSizeDidChange), name: NSView.frameDidChangeNotification, object: scroll)
@@ -294,6 +300,7 @@ public final class CanvasView: NSView {
   private var resizing = false
   private var lastVisibleSize = CGSize.zero
   private var lastMagnification: CGFloat = 0
+  private var liveMagnifying = false
 
   /// A tap on a Force Touch trackpad, as Keynote and Freeform give when something snaps into
   /// place. Trackpads without it, and mice, feel nothing.
@@ -309,7 +316,9 @@ public final class CanvasView: NSView {
       feelAlignment()
     }
     // Zooming or resizing changes the room the canvas has.
-    updateCanvasSize()
+    // Changing the document view's frame while AppKit is live-magnifying makes its own zoom
+    // anchor move beneath the fingers. Keep the desk still until the gesture ends.
+    if !liveMagnifying { updateCanvasSize() }
     let visible = unobscuredRect
     // AppKit resizes the clip view before saying the scroll view changed size, so a change of
     // size at the same zoom is the view resizing: it stays centred where it was, rather than
@@ -614,6 +623,14 @@ public final class CanvasView: NSView {
     needsDisplay = true
     lastSelectionRect = selectionRect()
     delegate?.canvasViewZoomDidChange(self)
+  }
+
+  @objc private func liveMagnifyDidStart() { liveMagnifying = true }
+
+  @objc private func liveMagnifyDidEnd() {
+    liveMagnifying = false
+    updateCanvasSize()
+    zoomDidChange()
   }
 
   /// Zooms to `value`, keeping the middle of the view, or `point`, where it is on screen.
