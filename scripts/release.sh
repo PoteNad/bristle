@@ -49,6 +49,7 @@ cp LICENSE "$APP/Contents/Resources/LICENSE"
 cp Info.plist "$APP/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${GITHUB_RUN_NUMBER:-1}" "$APP/Contents/Info.plist"
+BRISTLE_VERSION="$VERSION" BRISTLE_BUILD_NUMBER="${GITHUB_RUN_NUMBER:-1}" scripts/build-quick-look.sh "$APP" arm64 x86_64
 
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"

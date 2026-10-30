@@ -72,7 +72,7 @@ A PNG saved by Bristle stores the same JSON, zlib-compressed, in a private `brSC
 
 ## Build from source
 
-Bristle needs Xcode or the Command Line Tools with the macOS 26 SDK or newer. The built app still runs on macOS 13 and newer.
+Bristle needs Xcode with the macOS 26 SDK or newer, and CMake. The built app still runs on macOS 13 and newer.
 
 ```sh
 ./scripts/build.sh

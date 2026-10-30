@@ -258,6 +258,9 @@
             guard String(decoding: data, as: UTF8.self).hasPrefix("{\n  \"type\": \"bristle\",") else {
               fail("the file should be readable JSON")
             }
+            guard document.windowControllers.first?.window?.title == "Drawing" else {
+              fail("a saved Bristle drawing should show its name without the .bristle extension")
+            }
             document.save(to: png, ofType: UTType.png.identifier, for: .saveToOperation) { error in
               MainActor.assumeIsolated {
                 if let error { fail("saving a PNG failed: \(error)") }
@@ -707,6 +710,12 @@
         click(ring.center.applying(CGAffineTransform(translationX: 0, y: 150)), in: canvas)
         guard canvas.tool == .fill, canvas.styles[.fill]?.stroke == canvas.scene[ellipseID]?.fill else {
           fail("the eyedropper should pick the fill color and return to the fill tool")
+        }
+        canvas.tool = .eraser
+        canvas.tool = .eyedropper
+        click(ring.center.applying(CGAffineTransform(translationX: 0, y: 150)), in: canvas)
+        guard canvas.tool == .fill, canvas.styles[.fill]?.stroke == canvas.scene[ellipseID]?.fill else {
+          fail("the eyedropper used after an eraser should return to the last colour tool")
         }
         pass("the fill tool fills shapes and the eyedropper picks colors")
 

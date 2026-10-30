@@ -131,6 +131,9 @@ public enum Tool: String, CaseIterable, Sendable {
   /// Whether the tool makes elements that use its style.
   public var hasStyle: Bool { ![.select, .eyedropper].contains(self) }
 
+  /// Whether a colour picked from the canvas has a useful meaning for this tool.
+  public var usesColor: Bool { ![.select, .eraser, .strokeEraser, .eyedropper].contains(self) }
+
   /// Tools that make an element with a single drag.
   var makesShape: Bool { [.line, .arrow, .rectangle, .ellipse].contains(self) }
 }

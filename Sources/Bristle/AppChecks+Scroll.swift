@@ -287,6 +287,7 @@
         canvas.center(on: canvas.scene.canvas.center)
         let fingers = CGPoint(x: canvas.unobscuredRect.midX - 80, y: canvas.unobscuredRect.midY - 40)
         NotificationCenter.default.post(name: NSScrollView.willStartLiveMagnifyNotification, object: canvas.scrollView)
+        let liveFrame = canvas.frame
         var previous = canvas.unobscuredRect.center
         let zooms = Array(stride(from: 1.0, through: 2.5, by: 0.05)) + Array(stride(from: 2.5, through: 0.3, by: -0.05)) + Array(stride(from: 0.3, through: 1.2, by: 0.05))
         for zoom in zooms {
@@ -299,6 +300,7 @@
           let jump = now.distance(to: previous) * zoom
           guard jump < 80 else { fail("pinching jumped \(Int(jump)) points on screen at \(Int(zoom * 100))%") }
           previous = now
+          guard canvas.frame == liveFrame else { fail("pinching should not resize the canvas view during the gesture") }
         }
         NotificationCenter.default.post(name: NSScrollView.didEndLiveMagnifyNotification, object: canvas.scrollView)
         pass("pinching zooms smoothly in and out, without jumps")
@@ -308,6 +310,23 @@
           guard slowest.milliseconds < 16 else { fail("scrolling and zooming should keep up with the screen, but \(slowest.name) took \(slowest.milliseconds) ms") }
         }
         pass("every scroll and zoom step draws within a frame")
+
+        // Drawing toward an edge doesn't move the page underneath the stroke. Auto-scrolling
+        // remains for moving and resizing objects, where carrying them beyond the view is useful.
+        canvas.zoom(to: 3)
+        canvas.center(on: canvas.scene.canvas.center)
+        let shown = canvas.unobscuredRect
+        let start = CGPoint(x: shown.midX, y: shown.minY + 20)
+        let beforeStroke = canvas.unobscuredRect.center
+        canvas.tool = .pen
+        send(.leftMouseDown, at: start, in: canvas)
+        send(.leftMouseDragged, at: CGPoint(x: start.x, y: shown.minY - 80), in: canvas)
+        let afterStroke = canvas.unobscuredRect.center
+        send(.leftMouseUp, at: CGPoint(x: start.x, y: shown.minY - 80), in: canvas)
+        guard afterStroke.distance(to: beforeStroke) < 0.01 else {
+          fail("drawing toward an edge should not scroll the canvas: \(beforeStroke) to \(afterStroke)")
+        }
+        pass("drawing toward an edge does not scroll the canvas")
 
         // Tooltips: every toolbar tool keeps AppKit's own tooltip tracking.
         editor.window?.contentView?.layoutSubtreeIfNeeded()

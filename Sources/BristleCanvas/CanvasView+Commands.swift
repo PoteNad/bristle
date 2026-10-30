@@ -333,15 +333,17 @@ extension CanvasView: NSMenuItemValidation {
       return
     }
     let previous = toolBeforeEyedropper ?? .pencil
+    var returningTo = previous
     // The color goes to what was selected when the eyedropper was chosen, or to the tool.
     if let ids = selectionBeforeEyedropper, !ids.isEmpty {
       drawing.selection = ids
       setStyle("Pick Color") { $0.stroke = color }
     } else {
-      styles[previous, default: previous.defaultStyle].stroke = color
+      returningTo = previous.usesColor ? previous : lastColorTool
+      styles[returningTo, default: returningTo.defaultStyle].stroke = color
     }
     selectionBeforeEyedropper = nil
-    tool = previous
+    tool = returningTo
     delegate?.canvasView(self, didPick: color)
     delegate?.canvasViewStylesDidChange(self)
   }
